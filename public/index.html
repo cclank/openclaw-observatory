@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenClaw Observatory</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="bg-orb orb-a"></div>
+    <div class="bg-orb orb-b"></div>
+    <main class="layout">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">OpenClaw Metrics Console</p>
+          <h1>Observatory Dashboard</h1>
+          <p class="sub">Tokens, latency, tools, model mix, and memory footprint in one place.</p>
+        </div>
+        <div class="controls">
+          <label>
+            Window
+            <select id="daysSelect">
+              <option value="1">24h</option>
+              <option value="7">7d</option>
+              <option value="30" selected>30d</option>
+              <option value="90">90d</option>
+              <option value="all">All</option>
+            </select>
+          </label>
+          <label>
+            Agent
+            <select id="agentSelect">
+              <option value="">All agents</option>
+            </select>
+          </label>
+          <label>
+            Channel
+            <select id="channelSelect">
+              <option value="">All channels</option>
+            </select>
+          </label>
+          <button id="refreshBtn" type="button">Refresh</button>
+        </div>
+      </header>
+
+      <section class="cards" id="kpiCards"></section>
+
+      <section class="panel two-col">
+        <article>
+          <div class="panel-head">
+            <h2>Daily Token + Cost Trend</h2>
+            <span id="trendMeta" class="meta"></span>
+          </div>
+          <div id="trendChart" class="chart"></div>
+        </article>
+        <article>
+          <div class="panel-head">
+            <h2>Response Latency</h2>
+            <span id="latencyMeta" class="meta"></span>
+          </div>
+          <div id="latencyChart" class="chart"></div>
+        </article>
+      </section>
+
+      <section class="panel two-col">
+        <article>
+          <div class="panel-head">
+            <h2>Top Models</h2>
+          </div>
+          <div id="modelsList" class="bars"></div>
+        </article>
+        <article>
+          <div class="panel-head">
+            <h2>Top Tools</h2>
+          </div>
+          <div id="toolsList" class="bars"></div>
+        </article>
+      </section>
+
+      <section class="panel two-col">
+        <article>
+          <div class="panel-head">
+            <h2>Sessions</h2>
+            <span id="sessionCount" class="meta"></span>
+          </div>
+          <div class="table-wrap">
+            <table id="sessionsTable">
+              <thead>
+                <tr>
+                  <th>Session</th>
+                  <th>Agent</th>
+                  <th>Tokens</th>
+                  <th>Cost</th>
+                  <th>Latency</th>
+                  <th>Updated</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </article>
+        <article>
+          <div class="panel-head">
+            <h2>Session Inspector</h2>
+            <span class="meta">Click a row</span>
+          </div>
+          <div id="sessionInspector" class="inspector empty">No session selected.</div>
+        </article>
+      </section>
+
+      <section class="panel two-col">
+        <article>
+          <div class="panel-head">
+            <h2>Memory Footprint</h2>
+            <span id="memoryMeta" class="meta"></span>
+          </div>
+          <div id="memoryStats" class="memory-grid"></div>
+          <div id="memoryKeywords" class="chips"></div>
+        </article>
+        <article>
+          <div class="panel-head">
+            <h2>Latest Memory Files</h2>
+          </div>
+          <div id="memoryFiles" class="memory-files"></div>
+        </article>
+      </section>
+
+      <section class="panel two-col">
+        <article>
+          <div class="panel-head">
+            <h2>Anomaly Radar</h2>
+            <span class="meta">Token spike · latency jitter</span>
+          </div>
+          <div id="anomalyList" class="alerts"></div>
+        </article>
+        <article>
+          <div class="panel-head">
+            <h2>Model Switching Sessions</h2>
+            <span id="modelSwitchMeta" class="meta"></span>
+          </div>
+          <div id="modelSwitchList" class="memory-files"></div>
+        </article>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Operational Alerts</h2>
+          <span id="generatedAt" class="meta"></span>
+        </div>
+        <div id="alerts" class="alerts"></div>
+      </section>
+    </main>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

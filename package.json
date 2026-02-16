@@ -1,0 +1,16 @@
+{
+  "name": "@openclaw/openclaw-observatory",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Standalone observability toolkit and dashboard for OpenClaw",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node server.mjs --cache-ms 5000",
+    "collect": "node collector.mjs",
+    "check": "node --check collector.mjs && node --check server.mjs && node --check public/app.js"
+  }
+}
