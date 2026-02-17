@@ -3,7 +3,7 @@
 [English](README.md) | 简体中文
 
 [![Node.js >=22](https://img.shields.io/badge/node-%3E%3D22-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
-[![License](https://img.shields.io/github/license/cclank/openclaw-observatory)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Last Commit](https://img.shields.io/github/last-commit/cclank/openclaw-observatory)](https://github.com/cclank/openclaw-observatory/commits/main)
 
 OpenClaw Observatory 是一个面向 OpenClaw 的独立可观测性工具集。
