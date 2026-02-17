@@ -8,6 +8,8 @@ import { fileURLToPath } from "node:url";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const STOP_REASON_ERRORS = new Set(["error", "aborted", "cancelled", "timeout"]);
+const STOP_REASON_TIMEOUTS = new Set(["timeout"]);
+const STOP_REASON_CANCELLED = new Set(["aborted", "cancelled"]);
 const WORD_BLACKLIST = new Set([
   "this",
   "that",
@@ -24,6 +26,27 @@ const WORD_BLACKLIST = new Set([
   "note",
   "notes",
 ]);
+const PREMIUM_MODEL_HINTS = [
+  "gpt-5",
+  "gpt-4.1",
+  "o1",
+  "o3",
+  "claude-3.7",
+  "claude-3-7",
+  "claude-sonnet-4",
+  "claude-opus",
+  "gemini-2.5",
+  "grok-3",
+  "deepseek-r1",
+  "qwen-max",
+  "sonnet-4",
+  "opus",
+  "70b",
+  "405b",
+];
+const TOOL_CALL_TYPES = new Set(["tool_use", "toolcall", "tool_call"]);
+const TOOL_RESULT_TYPES = new Set(["tool_result", "tool_result_error"]);
+const VECTOR_TOOL_HINTS = ["memory_search", "qmd", "vector", "semantic", "embedding"];
 
 function parseArgs(argv) {
   const out = {};
@@ -187,6 +210,150 @@ function extractToolDetails(message) {
   return { names, results, errors };
 }
 
+function normalizeType(value) {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function normalizeToolName(value) {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function isVectorSearchToolName(name) {
+  const lower = normalizeToolName(name);
+  if (!lower) {
+    return false;
+  }
+  return VECTOR_TOOL_HINTS.some((hint) => lower.includes(hint));
+}
+
+function isMemorySearchToolName(name) {
+  const lower = normalizeToolName(name);
+  return lower === "memory_search" || lower.endsWith(".memory_search");
+}
+
+function isMemoryGetToolName(name) {
+  const lower = normalizeToolName(name);
+  return lower === "memory_get" || lower.endsWith(".memory_get");
+}
+
+function extractResultBlockText(value) {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+  if (!Array.isArray(value)) {
+    return "";
+  }
+  const chunks = [];
+  for (const part of value) {
+    if (typeof part === "string") {
+      if (part.trim()) {
+        chunks.push(part.trim());
+      }
+      continue;
+    }
+    const block = asRecord(part);
+    if (!block) {
+      continue;
+    }
+    if (typeof block.text === "string" && block.text.trim()) {
+      chunks.push(block.text.trim());
+    }
+  }
+  return chunks.join("\n").trim();
+}
+
+function extractToolBlocks(message) {
+  const uses = [];
+  const results = [];
+  const content = message?.content;
+  if (!Array.isArray(content)) {
+    return { uses, results };
+  }
+
+  for (const part of content) {
+    const block = asRecord(part);
+    if (!block) {
+      continue;
+    }
+    const type = normalizeType(block.type);
+    if (TOOL_CALL_TYPES.has(type)) {
+      uses.push({
+        id:
+          typeof block.id === "string" && block.id.trim()
+            ? block.id
+            : typeof block.tool_use_id === "string" && block.tool_use_id.trim()
+              ? block.tool_use_id
+              : null,
+        name: typeof block.name === "string" ? block.name : null,
+        input: asRecord(block.input) ?? null,
+      });
+      continue;
+    }
+    if (TOOL_RESULT_TYPES.has(type)) {
+      results.push({
+        id:
+          typeof block.tool_use_id === "string" && block.tool_use_id.trim()
+            ? block.tool_use_id
+            : typeof block.id === "string" && block.id.trim()
+              ? block.id
+              : null,
+        isError: block.is_error === true || type === "tool_result_error",
+        text: extractResultBlockText(block.content),
+      });
+    }
+  }
+
+  return { uses, results };
+}
+
+function parseJsonLoose(text) {
+  if (!text || typeof text !== "string") {
+    return null;
+  }
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return null;
+  }
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    // Best-effort parse for wrapped logs/code blocks.
+  }
+
+  const firstBrace = trimmed.indexOf("{");
+  const lastBrace = trimmed.lastIndexOf("}");
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    try {
+      return JSON.parse(trimmed.slice(firstBrace, lastBrace + 1));
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function mapTopEntries(map, limit = 20) {
+  return Array.from(map.entries())
+    .map(([key, count]) => ({ key, count }))
+    .sort((a, b) => b.count - a.count || a.key.localeCompare(b.key))
+    .slice(0, limit);
+}
+
+function extractQmdCollection(pathValue) {
+  if (typeof pathValue !== "string") {
+    return null;
+  }
+  const normalized = pathValue.trim();
+  if (!normalized.toLowerCase().startsWith("qmd/")) {
+    return null;
+  }
+  const parts = normalized.split("/").filter(Boolean);
+  if (parts.length < 2) {
+    return "unknown";
+  }
+  return parts[1];
+}
+
 function extractText(content) {
   if (typeof content === "string") {
     return content.trim();
@@ -249,6 +416,150 @@ function createTotals() {
     cacheReadCost: 0,
     cacheWriteCost: 0,
     missingCostEntries: 0,
+  };
+}
+
+function createRequestCounts() {
+  return {
+    total: 0,
+    billable: 0,
+    success: 0,
+    failed: 0,
+    timeout: 0,
+    cancelled: 0,
+    premium: 0,
+    standard: 0,
+    withCost: 0,
+    withoutCost: 0,
+  };
+}
+
+function mergeRequestCounts(target, source) {
+  target.total += source.total;
+  target.billable += source.billable;
+  target.success += source.success;
+  target.failed += source.failed;
+  target.timeout += source.timeout;
+  target.cancelled += source.cancelled;
+  target.premium += source.premium;
+  target.standard += source.standard;
+  target.withCost += source.withCost;
+  target.withoutCost += source.withoutCost;
+}
+
+function asPositiveInt(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) {
+    return null;
+  }
+  return Math.floor(n);
+}
+
+function makeRequestModelKey(provider, model) {
+  return `${provider ?? "unknown"}::${model ?? "unknown"}`;
+}
+
+function classifyRequestTier({ provider, model, premiumPattern }) {
+  const value = `${provider ?? ""} ${model ?? ""}`.toLowerCase();
+  if (!value.trim()) {
+    return "standard";
+  }
+  if (premiumPattern && premiumPattern.test(value)) {
+    return "premium";
+  }
+  for (const hint of PREMIUM_MODEL_HINTS) {
+    if (value.includes(hint)) {
+      return "premium";
+    }
+  }
+  return "standard";
+}
+
+function createRequestUsageRow(provider, model) {
+  return {
+    provider: provider ?? "unknown",
+    model: model ?? "unknown",
+    total: 0,
+    billable: 0,
+    success: 0,
+    failed: 0,
+    timeout: 0,
+    cancelled: 0,
+    premium: 0,
+    standard: 0,
+    withCost: 0,
+    withoutCost: 0,
+    tokens: 0,
+    cost: 0,
+  };
+}
+
+function mergeRequestUsageRow(target, source) {
+  target.total += source.total;
+  target.billable += source.billable;
+  target.success += source.success;
+  target.failed += source.failed;
+  target.timeout += source.timeout;
+  target.cancelled += source.cancelled;
+  target.premium += source.premium;
+  target.standard += source.standard;
+  target.withCost += source.withCost;
+  target.withoutCost += source.withoutCost;
+  target.tokens += source.tokens;
+  target.cost += source.cost;
+}
+
+function createRequestDimensionRow(seed = {}) {
+  return {
+    ...seed,
+    sessions: 0,
+    total: 0,
+    billable: 0,
+    success: 0,
+    failed: 0,
+    timeout: 0,
+    cancelled: 0,
+    premium: 0,
+    standard: 0,
+    withCost: 0,
+    withoutCost: 0,
+    tokens: 0,
+    cost: 0,
+  };
+}
+
+function applyRequestCountsToDimension(target, source, extras = {}) {
+  target.total += source.total ?? 0;
+  target.billable += source.billable ?? 0;
+  target.success += source.success ?? 0;
+  target.failed += source.failed ?? 0;
+  target.timeout += source.timeout ?? 0;
+  target.cancelled += source.cancelled ?? 0;
+  target.premium += source.premium ?? 0;
+  target.standard += source.standard ?? 0;
+  target.withCost += source.withCost ?? 0;
+  target.withoutCost += source.withoutCost ?? 0;
+  target.tokens += extras.tokens ?? 0;
+  target.cost += extras.cost ?? 0;
+}
+
+function createVectorStats() {
+  return {
+    searchCalls: 0,
+    searchSuccess: 0,
+    searchErrors: 0,
+    emptySearches: 0,
+    nonEmptySearches: 0,
+    qmdBackedSearches: 0,
+    fallbackSearches: 0,
+    totalResults: 0,
+    memoryGetCalls: 0,
+    qmdMemoryGetCalls: 0,
+    topQueryMap: new Map(),
+    topPathMap: new Map(),
+    topCollectionMap: new Map(),
+    providerModelMap: new Map(),
+    latencyValues: [],
   };
 }
 
@@ -375,7 +686,15 @@ function sortByCostThenTokens(a, b) {
 }
 
 async function parseSessionFile(params) {
-  const { filePath, fileName, agentId, storeIndex, range, timelineLimit = 240 } = params;
+  const {
+    filePath,
+    fileName,
+    agentId,
+    storeIndex,
+    range,
+    timelineLimit = 240,
+    premiumPattern = null,
+  } = params;
   const stat = await fsp.stat(filePath);
   const { stem, sessionId } = normalizeSessionIdFromFileName(fileName);
   const meta = resolveSessionMeta(fileName, sessionId, storeIndex);
@@ -391,9 +710,13 @@ async function parseSessionFile(params) {
     toolResults: 0,
     errors: 0,
   };
+  const requestCounts = createRequestCounts();
+  const vectorStats = createVectorStats();
 
   const toolMap = new Map();
   const modelMap = new Map();
+  const requestModelMap = new Map();
+  const pendingToolCalls = new Map();
   const dailyMap = new Map();
   const dailyLatencies = new Map();
   const latencyValues = [];
@@ -457,6 +780,17 @@ async function parseSessionFile(params) {
         tokens: 0,
         cost: 0,
         messages: 0,
+        requests: 0,
+        premiumRequests: 0,
+        requestErrors: 0,
+        requestTimeouts: 0,
+        requestCancelled: 0,
+        vectorSearches: 0,
+        vectorSearchErrors: 0,
+        vectorResults: 0,
+        qmdBackedSearches: 0,
+        memoryGetCalls: 0,
+        qmdMemoryGetCalls: 0,
         toolCalls: 0,
         errors: 0,
       });
@@ -479,6 +813,68 @@ async function parseSessionFile(params) {
     }
 
     const tools = extractToolDetails(message);
+    const toolBlocks = extractToolBlocks(message);
+    const explicitToolName =
+      typeof message.toolName === "string"
+        ? message.toolName
+        : typeof message.name === "string"
+          ? message.name
+          : null;
+
+    for (const use of toolBlocks.uses) {
+      const useName = typeof use.name === "string" ? use.name : null;
+      if (!useName) {
+        continue;
+      }
+      if (use.id) {
+        pendingToolCalls.set(use.id, {
+          name: useName,
+          query: typeof use.input?.query === "string" ? use.input.query.trim() : null,
+          path: typeof use.input?.path === "string" ? use.input.path.trim() : null,
+        });
+      }
+
+      if (isMemorySearchToolName(useName) || isVectorSearchToolName(useName)) {
+        vectorStats.searchCalls += 1;
+        if (dayBucket) {
+          dayBucket.vectorSearches += 1;
+        }
+        const query = typeof use.input?.query === "string" ? use.input.query.trim() : "";
+        if (query) {
+          vectorStats.topQueryMap.set(query, (vectorStats.topQueryMap.get(query) ?? 0) + 1);
+        }
+      }
+
+      if (isMemoryGetToolName(useName)) {
+        vectorStats.memoryGetCalls += 1;
+        if (dayBucket) {
+          dayBucket.memoryGetCalls += 1;
+        }
+        const memoryPath = typeof use.input?.path === "string" ? use.input.path.trim() : "";
+        if (memoryPath.toLowerCase().startsWith("qmd/")) {
+          vectorStats.qmdMemoryGetCalls += 1;
+          if (dayBucket) {
+            dayBucket.qmdMemoryGetCalls += 1;
+          }
+        }
+      }
+    }
+
+    if (role === "tool" && explicitToolName) {
+      if ((isMemorySearchToolName(explicitToolName) || isVectorSearchToolName(explicitToolName)) && !toolBlocks.uses.length) {
+        vectorStats.searchCalls += 1;
+        if (dayBucket) {
+          dayBucket.vectorSearches += 1;
+        }
+      }
+      if (isMemoryGetToolName(explicitToolName) && !toolBlocks.uses.length) {
+        vectorStats.memoryGetCalls += 1;
+        if (dayBucket) {
+          dayBucket.memoryGetCalls += 1;
+        }
+      }
+    }
+
     if (tools.names.length > 0) {
       messageCounts.toolCalls += tools.names.length;
       if (dayBucket) {
@@ -581,6 +977,135 @@ async function parseSessionFile(params) {
       }
     }
 
+    const resultBlocks = [...toolBlocks.results];
+    if (role === "toolResult" && resultBlocks.length === 0 && explicitToolName) {
+      resultBlocks.push({
+        id: null,
+        isError: false,
+        text: extractText(message.content),
+      });
+    }
+
+    for (const resultBlock of resultBlocks) {
+      const pending =
+        resultBlock.id && pendingToolCalls.has(resultBlock.id)
+          ? pendingToolCalls.get(resultBlock.id)
+          : null;
+      if (resultBlock.id && pending) {
+        pendingToolCalls.delete(resultBlock.id);
+      }
+      const resolvedToolName = pending?.name ?? explicitToolName;
+      if (!resolvedToolName) {
+        continue;
+      }
+
+      const vectorSearchTool =
+        isMemorySearchToolName(resolvedToolName) || isVectorSearchToolName(resolvedToolName);
+      if (vectorSearchTool) {
+        if (!pending) {
+          vectorStats.searchCalls += 1;
+          if (dayBucket) {
+            dayBucket.vectorSearches += 1;
+          }
+        }
+
+        const payload = parseJsonLoose(resultBlock.text);
+        const payloadRecord = asRecord(payload);
+        const payloadError =
+          typeof payloadRecord?.error === "string" ? payloadRecord.error.trim() : null;
+        const payloadResults = Array.isArray(payloadRecord?.results)
+          ? payloadRecord.results.map((item) => asRecord(item)).filter(Boolean)
+          : [];
+        const disabled = payloadRecord?.disabled === true;
+        const hasError = resultBlock.isError || Boolean(payloadError) || disabled;
+
+        if (hasError) {
+          vectorStats.searchErrors += 1;
+          if (dayBucket) {
+            dayBucket.vectorSearchErrors += 1;
+          }
+        } else {
+          vectorStats.searchSuccess += 1;
+        }
+
+        const resultCount = payloadResults.length;
+        vectorStats.totalResults += resultCount;
+        if (dayBucket) {
+          dayBucket.vectorResults += resultCount;
+        }
+        if (resultCount > 0) {
+          vectorStats.nonEmptySearches += 1;
+        } else {
+          vectorStats.emptySearches += 1;
+        }
+
+        let qmdBacked = false;
+        const provider =
+          typeof payloadRecord?.provider === "string" ? payloadRecord.provider.trim() : null;
+        const model =
+          typeof payloadRecord?.model === "string" ? payloadRecord.model.trim() : null;
+        if (provider && provider.toLowerCase().includes("qmd")) {
+          qmdBacked = true;
+        }
+        if (provider || model) {
+          const providerModelKey = `${provider ?? "unknown"} / ${model ?? "unknown"}`;
+          vectorStats.providerModelMap.set(
+            providerModelKey,
+            (vectorStats.providerModelMap.get(providerModelKey) ?? 0) + 1,
+          );
+        }
+        if (payloadRecord?.fallback) {
+          vectorStats.fallbackSearches += 1;
+        }
+        for (const row of payloadResults) {
+          const pathValue = typeof row.path === "string" ? row.path.trim() : "";
+          if (!pathValue) {
+            continue;
+          }
+          vectorStats.topPathMap.set(pathValue, (vectorStats.topPathMap.get(pathValue) ?? 0) + 1);
+          const collection = extractQmdCollection(pathValue);
+          if (collection) {
+            qmdBacked = true;
+            vectorStats.topCollectionMap.set(
+              collection,
+              (vectorStats.topCollectionMap.get(collection) ?? 0) + 1,
+            );
+          }
+        }
+        if (qmdBacked) {
+          vectorStats.qmdBackedSearches += 1;
+          if (dayBucket) {
+            dayBucket.qmdBackedSearches += 1;
+          }
+        }
+        if (typeof durationMs === "number" && Number.isFinite(durationMs) && durationMs >= 0) {
+          vectorStats.latencyValues.push(durationMs);
+        }
+      }
+
+      if (isMemoryGetToolName(resolvedToolName) && !pending) {
+        vectorStats.memoryGetCalls += 1;
+        if (dayBucket) {
+          dayBucket.memoryGetCalls += 1;
+        }
+      }
+
+      if (isMemoryGetToolName(resolvedToolName)) {
+        let pathCandidate = pending?.path ?? null;
+        const payload = parseJsonLoose(resultBlock.text);
+        const payloadRecord = asRecord(payload);
+        if (!pathCandidate && typeof payloadRecord?.path === "string") {
+          pathCandidate = payloadRecord.path.trim();
+        }
+        if (pathCandidate && pathCandidate.toLowerCase().startsWith("qmd/")) {
+          vectorStats.qmdMemoryGetCalls += 1;
+          if (dayBucket) {
+            dayBucket.qmdMemoryGetCalls += 1;
+          }
+        }
+      }
+    }
+
     if (
       role === "assistant" &&
       previousAssistantModelKey &&
@@ -594,6 +1119,87 @@ async function parseSessionFile(params) {
     }
 
     const entryIsError = tools.errors > 0 || (stopReasonLower ? STOP_REASON_ERRORS.has(stopReasonLower) : false);
+    if (role === "assistant") {
+      const tier = classifyRequestTier({ provider, model, premiumPattern });
+      const isBillable = Boolean(usage) || Boolean(provider) || Boolean(model);
+      const isTimeout = Boolean(stopReasonLower && STOP_REASON_TIMEOUTS.has(stopReasonLower));
+      const isCancelled = Boolean(stopReasonLower && STOP_REASON_CANCELLED.has(stopReasonLower));
+
+      requestCounts.total += 1;
+      if (isBillable) {
+        requestCounts.billable += 1;
+      }
+      if (entryIsError) {
+        requestCounts.failed += 1;
+      } else {
+        requestCounts.success += 1;
+      }
+      if (isTimeout) {
+        requestCounts.timeout += 1;
+      }
+      if (isCancelled) {
+        requestCounts.cancelled += 1;
+      }
+      if (tier === "premium") {
+        requestCounts.premium += 1;
+      } else {
+        requestCounts.standard += 1;
+      }
+      if (typeof entryCostTotal === "number") {
+        requestCounts.withCost += 1;
+      } else {
+        requestCounts.withoutCost += 1;
+      }
+
+      const requestModelKey = makeRequestModelKey(provider, model);
+      const requestRow =
+        requestModelMap.get(requestModelKey) ?? createRequestUsageRow(provider, model);
+      requestRow.total += 1;
+      if (isBillable) {
+        requestRow.billable += 1;
+      }
+      if (entryIsError) {
+        requestRow.failed += 1;
+      } else {
+        requestRow.success += 1;
+      }
+      if (isTimeout) {
+        requestRow.timeout += 1;
+      }
+      if (isCancelled) {
+        requestRow.cancelled += 1;
+      }
+      if (tier === "premium") {
+        requestRow.premium += 1;
+      } else {
+        requestRow.standard += 1;
+      }
+      if (typeof entryCostTotal === "number") {
+        requestRow.withCost += 1;
+        requestRow.cost += entryCostTotal;
+      } else {
+        requestRow.withoutCost += 1;
+      }
+      requestRow.tokens += usage?.total ?? 0;
+      requestModelMap.set(requestModelKey, requestRow);
+
+      if (dayBucket) {
+        dayBucket.requests += 1;
+        if (tier === "premium") {
+          dayBucket.premiumRequests += 1;
+        }
+        if (entryIsError) {
+          dayBucket.requestErrors += 1;
+        }
+        if (isTimeout) {
+          dayBucket.requestTimeouts += 1;
+        }
+        if (isCancelled) {
+          dayBucket.requestCancelled += 1;
+        }
+      }
+    }
+
     if (timestampMs !== undefined && role) {
       timeline.push({
         timestamp: timestampMs,
@@ -664,6 +1270,47 @@ async function parseSessionFile(params) {
   };
 
   const modelUsage = Array.from(modelMap.values()).sort(sortByCostThenTokens);
+  const requestUsage = Array.from(requestModelMap.values()).sort(
+    (a, b) => b.total - a.total || b.cost - a.cost || b.tokens - a.tokens,
+  );
+  const vectorLatency = computeLatencyStats(vectorStats.latencyValues);
+  const vector = {
+    searchCalls: vectorStats.searchCalls,
+    searchSuccess: vectorStats.searchSuccess,
+    searchErrors: vectorStats.searchErrors,
+    emptySearches: vectorStats.emptySearches,
+    nonEmptySearches: vectorStats.nonEmptySearches,
+    qmdBackedSearches: vectorStats.qmdBackedSearches,
+    fallbackSearches: vectorStats.fallbackSearches,
+    totalResults: vectorStats.totalResults,
+    memoryGetCalls: vectorStats.memoryGetCalls,
+    qmdMemoryGetCalls: vectorStats.qmdMemoryGetCalls,
+    avgResultsPerSearch:
+      vectorStats.searchCalls > 0 ? vectorStats.totalResults / vectorStats.searchCalls : 0,
+    qmdBackedRatePct:
+      vectorStats.searchCalls > 0 ? (vectorStats.qmdBackedSearches / vectorStats.searchCalls) * 100 : 0,
+    searchErrorRatePct:
+      vectorStats.searchCalls > 0 ? (vectorStats.searchErrors / vectorStats.searchCalls) * 100 : 0,
+    searchSuccessRatePct:
+      vectorStats.searchCalls > 0 ? (vectorStats.searchSuccess / vectorStats.searchCalls) * 100 : 0,
+    latency: vectorLatency ?? null,
+    topQueries: mapTopEntries(vectorStats.topQueryMap, 16).map((item) => ({
+      query: item.key,
+      count: item.count,
+    })),
+    topPaths: mapTopEntries(vectorStats.topPathMap, 20).map((item) => ({
+      path: item.key,
+      count: item.count,
+    })),
+    topCollections: mapTopEntries(vectorStats.topCollectionMap, 16).map((item) => ({
+      collection: item.key,
+      count: item.count,
+    })),
+    providerModels: mapTopEntries(vectorStats.providerModelMap, 16).map((item) => ({
+      providerModel: item.key,
+      count: item.count,
+    })),
+  };
   const latency = computeLatencyStats(latencyValues);
   const sortedTimeline = timeline.sort((a, b) => a.timestamp - b.timestamp);
   const sortedWaterfall = waterfall.sort((a, b) => a.startTs - b.startTs);
@@ -718,8 +1365,11 @@ async function parseSessionFile(params) {
         : undefined,
     totals,
     messageCounts,
+    requestCounts,
     toolUsage,
     modelUsage,
+    requestUsage,
+    vector,
     latency,
     daily,
     contextWeight,
@@ -889,7 +1539,7 @@ async function collectMemoryStats({ workspaceDir, memoryLimit = 80 }) {
   };
 }
 
-function buildAnomalies({ daily, sessions, latency }) {
+function buildAnomalies({ daily, sessions, latency, requests, vector }) {
   const tokenSpikes = [];
   if (daily.length >= 4) {
     const ordered = [...daily].sort((a, b) => a.date.localeCompare(b.date));
@@ -948,14 +1598,88 @@ function buildAnomalies({ daily, sessions, latency }) {
     }))
     .sort((a, b) => b.switches - a.switches || b.uniqueModels - a.uniqueModels);
 
+  const requestSpikes = [];
+  if (daily.length >= 4) {
+    const ordered = [...daily].sort((a, b) => a.date.localeCompare(b.date));
+    const last = ordered[ordered.length - 1];
+    const previous = ordered.slice(0, -1).map((d) => d.requests ?? 0).filter((n) => n > 0);
+    if (previous.length >= 3) {
+      const baseline = calcMean(previous);
+      const ratio = baseline > 0 ? (last.requests ?? 0) / baseline : 0;
+      if ((last.requests ?? 0) >= 20 && ratio >= 2.1) {
+        requestSpikes.push({
+          date: last.date,
+          requests: last.requests ?? 0,
+          baselineRequests: baseline,
+          ratio,
+        });
+      }
+    }
+  }
+
+  const requestFailureSpikes = [];
+  if (daily.length >= 5) {
+    const ordered = [...daily]
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .filter((d) => (d.requests ?? 0) > 0);
+    if (ordered.length >= 4) {
+      const last = ordered[ordered.length - 1];
+      const prevRates = ordered
+        .slice(0, -1)
+        .map((d) => ((d.requestErrors ?? 0) / Math.max(1, d.requests ?? 0)) * 100);
+      if (prevRates.length >= 3) {
+        const baseline = calcMean(prevRates);
+        const lastRate = ((last.requestErrors ?? 0) / Math.max(1, last.requests ?? 0)) * 100;
+        const ratio = baseline > 0 ? lastRate / baseline : 0;
+        if (lastRate >= 8 && ratio >= 1.8) {
+          requestFailureSpikes.push({
+            date: last.date,
+            ratePct: lastRate,
+            baselineRatePct: baseline,
+            ratio,
+            requests: last.requests ?? 0,
+          });
+        }
+      }
+    }
+  }
+
+  let qmdCoverageDrop = null;
+  if ((vector?.searchCalls ?? 0) >= 8) {
+    const qmdRate = vector?.qmdBackedRatePct ?? 0;
+    if (qmdRate < 35) {
+      qmdCoverageDrop = {
+        qmdBackedRatePct: qmdRate,
+        searchCalls: vector.searchCalls,
+        qmdBackedSearches: vector.qmdBackedSearches,
+      };
+    }
+  }
+
+  let requestFailureHigh = null;
+  if ((requests?.total ?? 0) >= 20) {
+    const failureRatePct = requests.failureRatePct ?? 0;
+    if (failureRatePct >= 10) {
+      requestFailureHigh = {
+        failureRatePct,
+        failed: requests.failed,
+        total: requests.total,
+      };
+    }
+  }
+
   return {
     tokenSpikes,
     latencyJitter,
     modelSwitching,
+    requestSpikes,
+    requestFailureSpikes,
+    qmdCoverageDrop,
+    requestFailureHigh,
   };
 }
 
-function buildAlerts({ totals, messages, sessions, memory, anomalies }) {
+function buildAlerts({ totals, messages, requests, vector, sessions, memory, anomalies, quota }) {
   const alerts = [];
 
   const errorRate = messages.total > 0 ? (messages.errors / messages.total) * 100 : 0;
@@ -973,6 +1697,46 @@ function buildAlerts({ totals, messages, sessions, memory, anomalies }) {
       level: "info",
       title: "Low Cache Read Share",
       message: `Cache read share is ${cacheRate.toFixed(1)}%; prompt reuse opportunities may exist.`,
+    });
+  }
+
+  if ((requests?.total ?? 0) >= 20 && (requests?.failureRatePct ?? 0) >= 8) {
+    alerts.push({
+      level: "warn",
+      title: "Request Failure Rate Elevated",
+      message: `Request failure rate is ${(requests.failureRatePct ?? 0).toFixed(1)}% (${requests.failed}/${requests.total}).`,
+    });
+  }
+
+  if ((vector?.searchCalls ?? 0) >= 10 && (vector?.searchErrorRatePct ?? 0) >= 10) {
+    alerts.push({
+      level: "warn",
+      title: "Vector Retrieval Errors Elevated",
+      message: `Vector search error rate is ${(vector.searchErrorRatePct ?? 0).toFixed(1)}% across ${vector.searchCalls} searches.`,
+    });
+  }
+
+  if ((vector?.searchCalls ?? 0) >= 10 && (vector?.qmdBackedRatePct ?? 0) < 40) {
+    alerts.push({
+      level: "info",
+      title: "Low QMD Coverage",
+      message: `Only ${(vector.qmdBackedRatePct ?? 0).toFixed(1)}% of vector searches were QMD-backed.`,
+    });
+  }
+
+  if (quota?.totalLimit && quota.totalUsagePct >= 90) {
+    alerts.push({
+      level: "warn",
+      title: "Request Quota Near Limit",
+      message: `Request quota usage ${(quota.totalUsagePct ?? 0).toFixed(1)}% (${quota.totalUsed}/${quota.totalLimit}).`,
+    });
+  }
+
+  if (quota?.premiumLimit && quota.premiumUsagePct >= 90) {
+    alerts.push({
+      level: "warn",
+      title: "Premium Quota Near Limit",
+      message: `Premium quota usage ${(quota.premiumUsagePct ?? 0).toFixed(1)}% (${quota.premiumUsed}/${quota.premiumLimit}).`,
     });
   }
 
@@ -1024,6 +1788,30 @@ function buildAlerts({ totals, messages, sessions, memory, anomalies }) {
     });
   }
 
+  for (const spike of anomalies.requestSpikes ?? []) {
+    alerts.push({
+      level: "warn",
+      title: "Request Spike Detected",
+      message: `${spike.date}: ${Math.round(spike.requests).toLocaleString()} requests (${spike.ratio.toFixed(2)}x baseline).`,
+    });
+  }
+
+  for (const spike of anomalies.requestFailureSpikes ?? []) {
+    alerts.push({
+      level: "warn",
+      title: "Request Failure Spike",
+      message: `${spike.date}: failure ${spike.ratePct.toFixed(1)}% (${spike.ratio.toFixed(2)}x baseline).`,
+    });
+  }
+
+  if (anomalies.qmdCoverageDrop) {
+    alerts.push({
+      level: "info",
+      title: "QMD Retrieval Coverage Low",
+      message: `QMD-backed retrieval ${(anomalies.qmdCoverageDrop.qmdBackedRatePct ?? 0).toFixed(1)}% (${anomalies.qmdCoverageDrop.qmdBackedSearches}/${anomalies.qmdCoverageDrop.searchCalls}).`,
+    });
+  }
+
   return alerts;
 }
 
@@ -1047,16 +1835,29 @@ function aggregateSessions({ sessions, filter }) {
     toolResults: 0,
     errors: 0,
   };
+  const requests = createRequestCounts();
+  const vector = createVectorStats();
 
   const toolsMap = new Map();
   const byModelMap = new Map();
   const byProviderMap = new Map();
   const byAgentMap = new Map();
   const byChannelMap = new Map();
+  const byRequestModelMap = new Map();
+  const byRequestProviderMap = new Map();
+  const byRequestAgentMap = new Map();
+  const byRequestChannelMap = new Map();
   const dailyMap = new Map();
   const contextRows = [];
 
   const latency = {
+    count: 0,
+    sum: 0,
+    min: Number.POSITIVE_INFINITY,
+    max: 0,
+    p95Max: 0,
+  };
+  const vectorLatency = {
     count: 0,
     sum: 0,
     min: Number.POSITIVE_INFINITY,
@@ -1073,6 +1874,42 @@ function aggregateSessions({ sessions, filter }) {
     messages.toolCalls += session.messageCounts.toolCalls;
     messages.toolResults += session.messageCounts.toolResults;
     messages.errors += session.messageCounts.errors;
+    mergeRequestCounts(requests, session.requestCounts);
+    vector.searchCalls += session.vector?.searchCalls ?? 0;
+    vector.searchSuccess += session.vector?.searchSuccess ?? 0;
+    vector.searchErrors += session.vector?.searchErrors ?? 0;
+    vector.emptySearches += session.vector?.emptySearches ?? 0;
+    vector.nonEmptySearches += session.vector?.nonEmptySearches ?? 0;
+    vector.qmdBackedSearches += session.vector?.qmdBackedSearches ?? 0;
+    vector.fallbackSearches += session.vector?.fallbackSearches ?? 0;
+    vector.totalResults += session.vector?.totalResults ?? 0;
+    vector.memoryGetCalls += session.vector?.memoryGetCalls ?? 0;
+    vector.qmdMemoryGetCalls += session.vector?.qmdMemoryGetCalls ?? 0;
+    for (const item of session.vector?.topQueries ?? []) {
+      vector.topQueryMap.set(item.query, (vector.topQueryMap.get(item.query) ?? 0) + item.count);
+    }
+    for (const item of session.vector?.topPaths ?? []) {
+      vector.topPathMap.set(item.path, (vector.topPathMap.get(item.path) ?? 0) + item.count);
+    }
+    for (const item of session.vector?.topCollections ?? []) {
+      vector.topCollectionMap.set(
+        item.collection,
+        (vector.topCollectionMap.get(item.collection) ?? 0) + item.count,
+      );
+    }
+    for (const item of session.vector?.providerModels ?? []) {
+      vector.providerModelMap.set(
+        item.providerModel,
+        (vector.providerModelMap.get(item.providerModel) ?? 0) + item.count,
+      );
+    }
+    if (session.vector?.latency?.count) {
+      vectorLatency.count += session.vector.latency.count;
+      vectorLatency.sum += session.vector.latency.avgMs * session.vector.latency.count;
+      vectorLatency.min = Math.min(vectorLatency.min, session.vector.latency.minMs);
+      vectorLatency.max = Math.max(vectorLatency.max, session.vector.latency.maxMs);
+      vectorLatency.p95Max = Math.max(vectorLatency.p95Max, session.vector.latency.p95Ms);
+    }
 
     if (session.latency?.count) {
       latency.count += session.latency.count;
@@ -1134,6 +1971,55 @@ function aggregateSessions({ sessions, filter }) {
     mergeTotals(channelRow.totals, session.totals);
     byChannelMap.set(channelKey, channelRow);
 
+    const requestAgentRow =
+      byRequestAgentMap.get(session.agentId) ??
+      createRequestDimensionRow({ agentId: session.agentId });
+    requestAgentRow.sessions += 1;
+    applyRequestCountsToDimension(requestAgentRow, session.requestCounts, {
+      tokens: session.totals.totalTokens,
+      cost: session.totals.totalCost,
+    });
+    byRequestAgentMap.set(session.agentId, requestAgentRow);
+
+    const requestChannelRow =
+      byRequestChannelMap.get(channelKey) ??
+      createRequestDimensionRow({ channel: channelKey });
+    requestChannelRow.sessions += 1;
+    applyRequestCountsToDimension(requestChannelRow, session.requestCounts, {
+      tokens: session.totals.totalTokens,
+      cost: session.totals.totalCost,
+    });
+    byRequestChannelMap.set(channelKey, requestChannelRow);
+
+    for (const requestRow of session.requestUsage ?? []) {
+      const modelKey = makeRequestModelKey(requestRow.provider, requestRow.model);
+      const modelAgg =
+        byRequestModelMap.get(modelKey) ??
+        createRequestDimensionRow({
+          provider: requestRow.provider ?? "unknown",
+          model: requestRow.model ?? "unknown",
+        });
+      modelAgg.sessions += 1;
+      applyRequestCountsToDimension(modelAgg, requestRow, {
+        tokens: requestRow.tokens ?? 0,
+        cost: requestRow.cost ?? 0,
+      });
+      byRequestModelMap.set(modelKey, modelAgg);
+
+      const providerKey = requestRow.provider ?? "unknown";
+      const providerAgg =
+        byRequestProviderMap.get(providerKey) ??
+        createRequestDimensionRow({
+          provider: requestRow.provider ?? "unknown",
+        });
+      providerAgg.sessions += 1;
+      applyRequestCountsToDimension(providerAgg, requestRow, {
+        tokens: requestRow.tokens ?? 0,
+        cost: requestRow.cost ?? 0,
+      });
+      byRequestProviderMap.set(providerKey, providerAgg);
+    }
+
     for (const day of session.daily) {
       const daily =
         dailyMap.get(day.date) ?? {
@@ -1141,6 +2027,17 @@ function aggregateSessions({ sessions, filter }) {
           tokens: 0,
           cost: 0,
           messages: 0,
+          requests: 0,
+          premiumRequests: 0,
+          requestErrors: 0,
+          requestTimeouts: 0,
+          requestCancelled: 0,
+          vectorSearches: 0,
+          vectorSearchErrors: 0,
+          vectorResults: 0,
+          qmdBackedSearches: 0,
+          memoryGetCalls: 0,
+          qmdMemoryGetCalls: 0,
           toolCalls: 0,
           errors: 0,
           latencyCount: 0,
@@ -1152,6 +2049,17 @@ function aggregateSessions({ sessions, filter }) {
       daily.tokens += day.tokens;
       daily.cost += day.cost;
       daily.messages += day.messages;
+      daily.requests += day.requests ?? 0;
+      daily.premiumRequests += day.premiumRequests ?? 0;
+      daily.requestErrors += day.requestErrors ?? 0;
+      daily.requestTimeouts += day.requestTimeouts ?? 0;
+      daily.requestCancelled += day.requestCancelled ?? 0;
+      daily.vectorSearches += day.vectorSearches ?? 0;
+      daily.vectorSearchErrors += day.vectorSearchErrors ?? 0;
+      daily.vectorResults += day.vectorResults ?? 0;
+      daily.qmdBackedSearches += day.qmdBackedSearches ?? 0;
+      daily.memoryGetCalls += day.memoryGetCalls ?? 0;
+      daily.qmdMemoryGetCalls += day.qmdMemoryGetCalls ?? 0;
       daily.toolCalls += day.toolCalls;
       daily.errors += day.errors;
       if (day.latency?.count) {
@@ -1198,6 +2106,18 @@ function aggregateSessions({ sessions, filter }) {
       tokens: day.tokens,
       cost: day.cost,
       messages: day.messages,
+      requests: day.requests,
+      premiumRequests: day.premiumRequests,
+      requestErrors: day.requestErrors,
+      requestTimeouts: day.requestTimeouts,
+      requestCancelled: day.requestCancelled,
+      requestErrorRatePct: day.requests > 0 ? (day.requestErrors / day.requests) * 100 : 0,
+      vectorSearches: day.vectorSearches,
+      vectorSearchErrors: day.vectorSearchErrors,
+      vectorResults: day.vectorResults,
+      qmdBackedSearches: day.qmdBackedSearches,
+      memoryGetCalls: day.memoryGetCalls,
+      qmdMemoryGetCalls: day.qmdMemoryGetCalls,
       toolCalls: day.toolCalls,
       errors: day.errors,
       latency:
@@ -1213,10 +2133,69 @@ function aggregateSessions({ sessions, filter }) {
     }))
     .sort((a, b) => a.date.localeCompare(b.date));
 
+  const requestStats = {
+    ...requests,
+    successRatePct: requests.total > 0 ? (requests.success / requests.total) * 100 : 0,
+    failureRatePct: requests.total > 0 ? (requests.failed / requests.total) * 100 : 0,
+    premiumSharePct: requests.total > 0 ? (requests.premium / requests.total) * 100 : 0,
+    billableRatePct: requests.total > 0 ? (requests.billable / requests.total) * 100 : 0,
+  };
+
+  const vectorStats = {
+    searchCalls: vector.searchCalls,
+    searchSuccess: vector.searchSuccess,
+    searchErrors: vector.searchErrors,
+    emptySearches: vector.emptySearches,
+    nonEmptySearches: vector.nonEmptySearches,
+    qmdBackedSearches: vector.qmdBackedSearches,
+    fallbackSearches: vector.fallbackSearches,
+    totalResults: vector.totalResults,
+    memoryGetCalls: vector.memoryGetCalls,
+    qmdMemoryGetCalls: vector.qmdMemoryGetCalls,
+    avgResultsPerSearch: vector.searchCalls > 0 ? vector.totalResults / vector.searchCalls : 0,
+    qmdBackedRatePct:
+      vector.searchCalls > 0 ? (vector.qmdBackedSearches / vector.searchCalls) * 100 : 0,
+    searchErrorRatePct:
+      vector.searchCalls > 0 ? (vector.searchErrors / vector.searchCalls) * 100 : 0,
+    searchSuccessRatePct:
+      vector.searchCalls > 0 ? (vector.searchSuccess / vector.searchCalls) * 100 : 0,
+    latency:
+      vectorLatency.count > 0
+        ? {
+            count: vectorLatency.count,
+            avgMs: vectorLatency.sum / vectorLatency.count,
+            minMs: vectorLatency.min,
+            maxMs: vectorLatency.max,
+            p95Ms: vectorLatency.p95Max,
+          }
+        : null,
+    topQueries: mapTopEntries(vector.topQueryMap, 16).map((item) => ({
+      query: item.key,
+      count: item.count,
+    })),
+    topPaths: mapTopEntries(vector.topPathMap, 20).map((item) => ({
+      path: item.key,
+      count: item.count,
+    })),
+    topCollections: mapTopEntries(vector.topCollectionMap, 16).map((item) => ({
+      collection: item.key,
+      count: item.count,
+    })),
+    providerModels: mapTopEntries(vector.providerModelMap, 16).map((item) => ({
+      providerModel: item.key,
+      count: item.count,
+    })),
+  };
+
+  const sortRequestRows = (a, b) =>
+    b.total - a.total || b.premium - a.premium || b.cost - a.cost || b.tokens - a.tokens;
+
   return {
     filtered,
     totals,
     messages,
+    requests: requestStats,
+    vector: vectorStats,
     latency: latencyStats,
     aggregates: {
       daily,
@@ -1233,6 +2212,10 @@ function aggregateSessions({ sessions, filter }) {
       byChannel: Array.from(byChannelMap.values()).sort((a, b) =>
         sortByCostThenTokens(a, b),
       ),
+      byRequestModel: Array.from(byRequestModelMap.values()).sort(sortRequestRows),
+      byRequestProvider: Array.from(byRequestProviderMap.values()).sort(sortRequestRows),
+      byRequestAgent: Array.from(byRequestAgentMap.values()).sort(sortRequestRows),
+      byRequestChannel: Array.from(byRequestChannelMap.values()).sort(sortRequestRows),
       context: contextRows.sort((a, b) => b.chars - a.chars),
     },
   };
@@ -1258,6 +2241,65 @@ function resolveWorkspaceDir(inputWorkspaceDir, stateDir) {
   return path.join(stateDir, "workspace");
 }
 
+function resolvePremiumPattern(inputPattern) {
+  const value =
+    typeof inputPattern === "string" && inputPattern.trim()
+      ? inputPattern.trim()
+      : typeof process.env.OPENCLAW_PREMIUM_MODEL_PATTERN === "string" &&
+          process.env.OPENCLAW_PREMIUM_MODEL_PATTERN.trim()
+        ? process.env.OPENCLAW_PREMIUM_MODEL_PATTERN.trim()
+        : null;
+  if (!value) {
+    return null;
+  }
+  try {
+    return new RegExp(value, "i");
+  } catch {
+    return null;
+  }
+}
+
+function resolveQuotaLimits(options = {}) {
+  const totalLimit = asPositiveInt(options.requestQuota ?? process.env.OPENCLAW_REQUEST_QUOTA);
+  const premiumLimit = asPositiveInt(options.premiumQuota ?? process.env.OPENCLAW_PREMIUM_REQUEST_QUOTA);
+  return {
+    totalLimit,
+    premiumLimit,
+  };
+}
+
+function buildQuotaSummary({ limits, requests }) {
+  const totalUsed = requests?.billable ?? requests?.total ?? 0;
+  const premiumUsed = requests?.premium ?? 0;
+  const totalRemaining =
+    typeof limits.totalLimit === "number" ? Math.max(0, limits.totalLimit - totalUsed) : null;
+  const premiumRemaining =
+    typeof limits.premiumLimit === "number"
+      ? Math.max(0, limits.premiumLimit - premiumUsed)
+      : null;
+  const totalUsagePct =
+    typeof limits.totalLimit === "number" && limits.totalLimit > 0
+      ? (totalUsed / limits.totalLimit) * 100
+      : null;
+  const premiumUsagePct =
+    typeof limits.premiumLimit === "number" && limits.premiumLimit > 0
+      ? (premiumUsed / limits.premiumLimit) * 100
+      : null;
+  return {
+    ...limits,
+    totalUsed,
+    premiumUsed,
+    totalRemaining,
+    premiumRemaining,
+    totalUsagePct,
+    premiumUsagePct,
+    totalExceeded:
+      typeof limits.totalLimit === "number" ? totalUsed > limits.totalLimit : false,
+    premiumExceeded:
+      typeof limits.premiumLimit === "number" ? premiumUsed > limits.premiumLimit : false,
+  };
+}
+
 async function listAgents(stateDir) {
   const agentsDir = path.join(stateDir, "agents");
   let entries = [];
@@ -1272,7 +2314,7 @@ async function listAgents(stateDir) {
     .sort((a, b) => a.localeCompare(b));
 }
 
-async function collectSessionsFromState({ stateDir, range, timelineLimit }) {
+async function collectSessionsFromState({ stateDir, range, timelineLimit, premiumPattern }) {
   const agents = await listAgents(stateDir);
   const sessions = [];
 
@@ -1301,6 +2343,7 @@ async function collectSessionsFromState({ stateDir, range, timelineLimit }) {
           storeIndex,
           range,
           timelineLimit,
+          premiumPattern,
         });
         sessions.push(summary);
       } catch {
@@ -1341,8 +2384,13 @@ export async function collectOpenClawMetrics(options = {}) {
 
   const timelineLimit =
     Number.isFinite(options.timelineLimit) && options.timelineLimit > 0 ? options.timelineLimit : 240;
-
-  const { sessions, agents } = await collectSessionsFromState({ stateDir, range, timelineLimit });
+  const premiumPattern = resolvePremiumPattern(options.premiumModelPattern);
+  const { sessions, agents } = await collectSessionsFromState({
+    stateDir,
+    range,
+    timelineLimit,
+    premiumPattern,
+  });
 
   const filter = {
     agent: typeof options.agent === "string" && options.agent ? options.agent : null,
@@ -1371,14 +2419,24 @@ export async function collectOpenClawMetrics(options = {}) {
     daily: aggregated.aggregates.daily,
     sessions: aggregated.filtered,
     latency: aggregated.latency,
+    requests: aggregated.requests,
+    vector: aggregated.vector,
+  });
+
+  const quota = buildQuotaSummary({
+    limits: resolveQuotaLimits(options),
+    requests: aggregated.requests,
   });
 
   const alerts = buildAlerts({
     totals: aggregated.totals,
     messages: aggregated.messages,
+    requests: aggregated.requests,
+    vector: aggregated.vector,
     sessions: aggregated.filtered,
     memory,
     anomalies,
+    quota,
   });
 
   return {
@@ -1395,6 +2453,11 @@ export async function collectOpenClawMetrics(options = {}) {
       sessionsInScope: aggregated.filtered.length,
       totalTokens: aggregated.totals.totalTokens,
       totalCost: aggregated.totals.totalCost,
+      totalRequests: aggregated.requests.total,
+      billableRequests: aggregated.requests.billable,
+      premiumRequests: aggregated.requests.premium,
+      requestFailureRatePct: aggregated.requests.failureRatePct,
+      requestSuccessRatePct: aggregated.requests.successRatePct,
       cacheReadSharePct:
         aggregated.totals.totalTokens > 0
           ? (aggregated.totals.cacheRead / aggregated.totals.totalTokens) * 100
@@ -1403,11 +2466,17 @@ export async function collectOpenClawMetrics(options = {}) {
         aggregated.messages.total > 0
           ? (aggregated.messages.errors / aggregated.messages.total) * 100
           : 0,
+      vectorSearches: aggregated.vector.searchCalls,
+      vectorSearchErrorRatePct: aggregated.vector.searchErrorRatePct,
+      qmdBackedRatePct: aggregated.vector.qmdBackedRatePct,
       avgLatencyMs: aggregated.latency?.avgMs ?? null,
       p95LatencyMs: aggregated.latency?.p95Ms ?? null,
     },
     totals: aggregated.totals,
     messages: aggregated.messages,
+    requests: aggregated.requests,
+    vector: aggregated.vector,
+    quota,
     latency: aggregated.latency,
     aggregates: aggregated.aggregates,
     sessions: topSessions,
@@ -1422,11 +2491,149 @@ function asNumber(value, fallback) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function compactInt(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "0";
+  }
+  return Math.round(value).toLocaleString("en-US");
+}
+
+function compactTokens(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "0";
+  }
+  if (value >= 1_000_000) {
+    return `${(value / 1_000_000).toFixed(2)}M`;
+  }
+  if (value >= 1_000) {
+    return `${(value / 1_000).toFixed(1)}K`;
+  }
+  return String(Math.round(value));
+}
+
+function compactPct(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "0.0%";
+  }
+  return `${value.toFixed(1)}%`;
+}
+
+function compactUsd(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "$0.0000";
+  }
+  return `$${value.toFixed(4)}`;
+}
+
+function compactMs(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "-";
+  }
+  if (value >= 1000) {
+    return `${(value / 1000).toFixed(2)}s`;
+  }
+  return `${Math.round(value)}ms`;
+}
+
+export function buildCommandText(payload, options = {}) {
+  const command = typeof options.command === "string" ? options.command.trim().toLowerCase() : "summary";
+  const maxItems = Math.max(1, asNumber(options.maxItems, 6));
+  const range = payload?.range?.days ?? "30";
+  const summary = payload?.summary ?? {};
+  const requests = payload?.requests ?? {};
+  const vector = payload?.vector ?? {};
+  const quota = payload?.quota ?? {};
+  const generatedAt =
+    typeof payload?.generatedAt === "number" ? new Date(payload.generatedAt).toLocaleString() : "-";
+
+  if (command === "quota") {
+    const lines = [
+      `OpenClaw Quota (${range}d)`,
+      `Requests: ${compactInt(quota.totalUsed)} / ${quota.totalLimit ?? "unlimited"} (${compactPct(quota.totalUsagePct ?? 0)})`,
+      `Premium: ${compactInt(quota.premiumUsed)} / ${quota.premiumLimit ?? "unlimited"} (${compactPct(quota.premiumUsagePct ?? 0)})`,
+      `Remaining: total ${quota.totalRemaining ?? "∞"} · premium ${quota.premiumRemaining ?? "∞"}`,
+      `Generated: ${generatedAt}`,
+    ];
+    return lines.join("\n");
+  }
+
+  if (command === "qmd") {
+    const topCollections = (vector.topCollections ?? [])
+      .slice(0, maxItems)
+      .map((item) => `${item.collection}(${compactInt(item.count)})`)
+      .join(", ");
+    const topQueries = (vector.topQueries ?? [])
+      .slice(0, maxItems)
+      .map((item) => `${item.query}(${compactInt(item.count)})`)
+      .join(" | ");
+    const lines = [
+      `OpenClaw QMD/Vector (${range}d)`,
+      `Searches: ${compactInt(vector.searchCalls)} · QMD-backed ${compactPct(vector.qmdBackedRatePct)}`,
+      `Errors: ${compactPct(vector.searchErrorRatePct)} · Avg results ${Number(vector.avgResultsPerSearch ?? 0).toFixed(2)}`,
+      `Latency: avg ${compactMs(vector.latency?.avgMs)} · p95 ${compactMs(vector.latency?.p95Ms)}`,
+      `memory_get: ${compactInt(vector.memoryGetCalls)} · qmd path ${compactInt(vector.qmdMemoryGetCalls)}`,
+      `Top collections: ${topCollections || "-"}`,
+      `Top queries: ${topQueries || "-"}`,
+      `Generated: ${generatedAt}`,
+    ];
+    return lines.join("\n");
+  }
+
+  if (command === "alerts") {
+    const alerts = (payload?.alerts ?? []).slice(0, Math.max(maxItems, 3));
+    const lines = [`OpenClaw Alerts (${range}d)`];
+    if (!alerts.length) {
+      lines.push("No active alerts.");
+    } else {
+      for (const alert of alerts) {
+        lines.push(`- [${alert.level ?? "info"}] ${alert.title}: ${alert.message}`);
+      }
+    }
+    lines.push(`Generated: ${generatedAt}`);
+    return lines.join("\n");
+  }
+
+  if (command === "daily") {
+    const dailyRows = (payload?.aggregates?.daily ?? []).slice(-Math.max(maxItems, 7));
+    const lines = [`OpenClaw Daily (${range}d)`];
+    for (const row of dailyRows) {
+      lines.push(
+        `${row.date}: req ${compactInt(row.requests)} (${compactPct(row.requestErrorRatePct)}) · tok ${compactTokens(row.tokens)} · qmd ${compactInt(row.qmdBackedSearches)}/${compactInt(row.vectorSearches)}`,
+      );
+    }
+    lines.push(`Generated: ${generatedAt}`);
+    return lines.join("\n");
+  }
+
+  if (command === "help") {
+    return [
+      "OpenClaw command views:",
+      "- summary",
+      "- quota",
+      "- qmd",
+      "- alerts",
+      "- daily",
+      "Example: node collector.mjs --command summary --days 7",
+    ].join("\n");
+  }
+
+  const lines = [
+    `OpenClaw Summary (${range}d)`,
+    `Requests: ${compactInt(summary.totalRequests)} (billable ${compactInt(summary.billableRequests)} · premium ${compactInt(summary.premiumRequests)} · fail ${compactPct(summary.requestFailureRatePct)})`,
+    `Tokens: ${compactTokens(summary.totalTokens)} · Cost ${compactUsd(summary.totalCost)}`,
+    `Latency: avg ${compactMs(summary.avgLatencyMs)} · p95 ${compactMs(summary.p95LatencyMs)}`,
+    `Vector/QMD: ${compactInt(summary.vectorSearches)} searches · qmd ${compactPct(summary.qmdBackedRatePct)} · err ${compactPct(summary.vectorSearchErrorRatePct)}`,
+    `Quota: total ${quota.totalLimit ?? "unlimited"} (used ${compactInt(quota.totalUsed)}) · premium ${quota.premiumLimit ?? "unlimited"} (used ${compactInt(quota.premiumUsed)})`,
+    `Generated: ${generatedAt}`,
+  ];
+  return lines.join("\n");
+}
+
 async function runCli() {
   const args = parseArgs(process.argv.slice(2));
 
   if (args.help) {
-    console.log(`OpenClaw Observatory Collector\n\nUsage:\n  node collector.mjs [--state-dir <path>] [--workspace-dir <path>] [--days <n|all>] [--agent <id>] [--channel <name>] [--session-limit <n>] [--memory-limit <n>] [--timeline-limit <n>] [--out <file>] [--pretty]\n`);
+    console.log(`OpenClaw Observatory Collector\n\nUsage:\n  node collector.mjs [--state-dir <path>] [--workspace-dir <path>] [--days <n|all>] [--agent <id>] [--channel <name>] [--session-limit <n>] [--memory-limit <n>] [--timeline-limit <n>] [--request-quota <n>] [--premium-quota <n>] [--premium-model-pattern <regex>] [--command <summary|quota|qmd|alerts|daily|help>] [--max-items <n>] [--out <file>] [--pretty]\n`);
     process.exit(0);
   }
 
@@ -1440,7 +2647,29 @@ async function runCli() {
     sessionLimit: asNumber(args["session-limit"], 250),
     memoryLimit: asNumber(args["memory-limit"], 100),
     timelineLimit: asNumber(args["timeline-limit"], 240),
+    requestQuota: asNumber(args["request-quota"], NaN),
+    premiumQuota: asNumber(args["premium-quota"], NaN),
+    premiumModelPattern:
+      typeof args["premium-model-pattern"] === "string"
+        ? args["premium-model-pattern"]
+        : undefined,
   });
+
+  const command = typeof args.command === "string" ? args.command : null;
+  if (command) {
+    const text = buildCommandText(payload, {
+      command,
+      maxItems: asNumber(args["max-items"], 6),
+    });
+    const outFile = typeof args.out === "string" ? args.out : null;
+    if (outFile) {
+      await fsp.writeFile(path.resolve(outFile), `${text}\n`, "utf8");
+      console.log(`Wrote command snapshot to ${path.resolve(outFile)}`);
+      return;
+    }
+    process.stdout.write(`${text}\n`);
+    return;
+  }
 
   const pretty = Boolean(args.pretty);
   const output = JSON.stringify(payload, null, pretty ? 2 : 0);

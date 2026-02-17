@@ -39,6 +39,14 @@
               <option value="">All channels</option>
             </select>
           </label>
+          <label>
+            Request Quota
+            <input id="requestQuotaInput" type="number" min="1" step="1" placeholder="Unlimited" />
+          </label>
+          <label>
+            Premium Quota
+            <input id="premiumQuotaInput" type="number" min="1" step="1" placeholder="Unlimited" />
+          </label>
           <button id="refreshBtn" type="button">Refresh</button>
         </div>
       </header>
@@ -65,6 +73,41 @@
       <section class="panel two-col">
         <article>
           <div class="panel-head">
+            <h2>Request Volume</h2>
+            <span id="requestTrendMeta" class="meta"></span>
+          </div>
+          <div id="requestTrendChart" class="chart"></div>
+        </article>
+        <article>
+          <div class="panel-head">
+            <h2>Request Reliability</h2>
+            <span id="requestHealthMeta" class="meta"></span>
+          </div>
+          <div id="requestHealthChart" class="chart"></div>
+        </article>
+      </section>
+
+      <section class="panel two-col">
+        <article>
+          <div class="panel-head">
+            <h2>Quota and Budget</h2>
+            <span id="quotaMeta" class="meta"></span>
+          </div>
+          <div id="quotaCards" class="memory-grid"></div>
+        </article>
+        <article>
+          <div class="panel-head">
+            <h2>QMD and Vector Retrieval</h2>
+            <span id="vectorMeta" class="meta"></span>
+          </div>
+          <div id="vectorStats" class="memory-grid"></div>
+          <div id="vectorCollections" class="chips"></div>
+        </article>
+      </section>
+
+      <section class="panel two-col">
+        <article>
+          <div class="panel-head">
             <h2>Top Models</h2>
           </div>
           <div id="modelsList" class="bars"></div>
@@ -74,6 +117,21 @@
             <h2>Top Tools</h2>
           </div>
           <div id="toolsList" class="bars"></div>
+        </article>
+      </section>
+
+      <section class="panel two-col">
+        <article>
+          <div class="panel-head">
+            <h2>Request by Model</h2>
+          </div>
+          <div id="requestModelsList" class="bars"></div>
+        </article>
+        <article>
+          <div class="panel-head">
+            <h2>Request by Channel</h2>
+          </div>
+          <div id="requestChannelsList" class="bars"></div>
         </article>
       </section>
 
@@ -106,6 +164,21 @@
           </div>
           <div id="sessionInspector" class="inspector empty">No session selected.</div>
         </article>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Bot Command Preview</h2>
+          <span class="meta">Telegram / Discord short command response</span>
+        </div>
+        <div class="command-toolbar">
+          <button class="cmd-btn" data-cmd="summary" type="button">summary</button>
+          <button class="cmd-btn" data-cmd="quota" type="button">quota</button>
+          <button class="cmd-btn" data-cmd="qmd" type="button">qmd</button>
+          <button class="cmd-btn" data-cmd="alerts" type="button">alerts</button>
+          <button class="cmd-btn" data-cmd="daily" type="button">daily</button>
+        </div>
+        <pre id="commandPreview" class="command-preview">Loading command preview…</pre>
       </section>
 
       <section class="panel two-col">

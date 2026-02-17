@@ -11,6 +11,7 @@
     "start": "node server.mjs",
     "dev": "node server.mjs --cache-ms 5000",
     "collect": "node collector.mjs",
-    "check": "node --check collector.mjs && node --check server.mjs && node --check public/app.js"
+    "command": "node bot-command.mjs",
+    "check": "node --check collector.mjs && node --check server.mjs && node --check bot-command.mjs && node --check public/app.js"
   }
 }

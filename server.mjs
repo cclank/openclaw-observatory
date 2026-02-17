@@ -3,7 +3,7 @@ import http from "node:http";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { collectOpenClawMetrics } from "./collector.mjs";
+import { buildCommandText, collectOpenClawMetrics } from "./collector.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, "public");
@@ -106,6 +106,12 @@ async function main() {
     stateDir: typeof args["state-dir"] === "string" ? args["state-dir"] : undefined,
     workspaceDir:
       typeof args["workspace-dir"] === "string" ? args["workspace-dir"] : undefined,
+    requestQuota: asNumber(args["request-quota"], NaN),
+    premiumQuota: asNumber(args["premium-quota"], NaN),
+    premiumModelPattern:
+      typeof args["premium-model-pattern"] === "string"
+        ? args["premium-model-pattern"]
+        : undefined,
   };
 
   const server = http.createServer(async (req, res) => {
@@ -132,6 +138,12 @@ async function main() {
           sessionLimit: asNumber(query.sessionLimit, 250),
           memoryLimit: asNumber(query.memoryLimit, 100),
           timelineLimit: asNumber(query.timelineLimit, 240),
+          requestQuota: asNumber(query.requestQuota, fixedOptions.requestQuota),
+          premiumQuota: asNumber(query.premiumQuota, fixedOptions.premiumQuota),
+          premiumModelPattern:
+            typeof query.premiumModelPattern === "string" && query.premiumModelPattern
+              ? query.premiumModelPattern
+              : fixedOptions.premiumModelPattern,
         };
         const payload = await cache.get(options);
         json(res, 200, { ok: true, data: payload });
@@ -140,6 +152,81 @@ async function main() {
           ok: false,
           error: error instanceof Error ? error.message : String(error),
         });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/command") {
+      try {
+        const query = readQuery(url);
+        const options = {
+          ...fixedOptions,
+          days: query.days && query.days !== "" ? query.days : "30",
+          agent: query.agent || undefined,
+          channel: query.channel || undefined,
+          sessionLimit: asNumber(query.sessionLimit, 250),
+          memoryLimit: asNumber(query.memoryLimit, 100),
+          timelineLimit: asNumber(query.timelineLimit, 240),
+          requestQuota: asNumber(query.requestQuota, fixedOptions.requestQuota),
+          premiumQuota: asNumber(query.premiumQuota, fixedOptions.premiumQuota),
+          premiumModelPattern:
+            typeof query.premiumModelPattern === "string" && query.premiumModelPattern
+              ? query.premiumModelPattern
+              : fixedOptions.premiumModelPattern,
+        };
+        const payload = await cache.get(options);
+        const command =
+          typeof query.cmd === "string" && query.cmd.trim() ? query.cmd.trim() : "summary";
+        const text = buildCommandText(payload, {
+          command,
+          maxItems: asNumber(query.maxItems, 6),
+        });
+        json(res, 200, { ok: true, command, text });
+      } catch (error) {
+        json(res, 500, {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return;
+    }
+
+    if (url.pathname === "/command.txt") {
+      try {
+        const query = readQuery(url);
+        const options = {
+          ...fixedOptions,
+          days: query.days && query.days !== "" ? query.days : "30",
+          agent: query.agent || undefined,
+          channel: query.channel || undefined,
+          sessionLimit: asNumber(query.sessionLimit, 250),
+          memoryLimit: asNumber(query.memoryLimit, 100),
+          timelineLimit: asNumber(query.timelineLimit, 240),
+          requestQuota: asNumber(query.requestQuota, fixedOptions.requestQuota),
+          premiumQuota: asNumber(query.premiumQuota, fixedOptions.premiumQuota),
+          premiumModelPattern:
+            typeof query.premiumModelPattern === "string" && query.premiumModelPattern
+              ? query.premiumModelPattern
+              : fixedOptions.premiumModelPattern,
+        };
+        const payload = await cache.get(options);
+        const command =
+          typeof query.cmd === "string" && query.cmd.trim() ? query.cmd.trim() : "summary";
+        const text = buildCommandText(payload, {
+          command,
+          maxItems: asNumber(query.maxItems, 6),
+        });
+        res.writeHead(200, {
+          "content-type": "text/plain; charset=utf-8",
+          "cache-control": "no-store",
+        });
+        res.end(`${text}\n`);
+      } catch (error) {
+        res.writeHead(500, {
+          "content-type": "text/plain; charset=utf-8",
+          "cache-control": "no-store",
+        });
+        res.end(`error: ${error instanceof Error ? error.message : String(error)}\n`);
       }
       return;
     }
@@ -166,7 +253,9 @@ async function main() {
   server.listen(port, host, () => {
     process.stdout.write(
       `OpenClaw Observatory running at http://${host}:${port}\n` +
-        `API: http://${host}:${port}/api/collect?days=30\n`,
+        `API: http://${host}:${port}/api/collect?days=30\n` +
+        `Command API: http://${host}:${port}/api/command?cmd=summary&days=30\n` +
+        `Command Text: http://${host}:${port}/command.txt?cmd=summary&days=30\n`,
     );
   });
 }

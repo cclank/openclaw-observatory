@@ -2,14 +2,27 @@ const els = {
   days: document.getElementById("daysSelect"),
   agent: document.getElementById("agentSelect"),
   channel: document.getElementById("channelSelect"),
+  requestQuota: document.getElementById("requestQuotaInput"),
+  premiumQuota: document.getElementById("premiumQuotaInput"),
   refresh: document.getElementById("refreshBtn"),
   cards: document.getElementById("kpiCards"),
   trend: document.getElementById("trendChart"),
   trendMeta: document.getElementById("trendMeta"),
+  requestTrend: document.getElementById("requestTrendChart"),
+  requestTrendMeta: document.getElementById("requestTrendMeta"),
+  requestHealth: document.getElementById("requestHealthChart"),
+  requestHealthMeta: document.getElementById("requestHealthMeta"),
+  quotaMeta: document.getElementById("quotaMeta"),
+  quotaCards: document.getElementById("quotaCards"),
+  vectorMeta: document.getElementById("vectorMeta"),
+  vectorStats: document.getElementById("vectorStats"),
+  vectorCollections: document.getElementById("vectorCollections"),
   latency: document.getElementById("latencyChart"),
   latencyMeta: document.getElementById("latencyMeta"),
   models: document.getElementById("modelsList"),
   tools: document.getElementById("toolsList"),
+  requestModels: document.getElementById("requestModelsList"),
+  requestChannels: document.getElementById("requestChannelsList"),
   sessionCount: document.getElementById("sessionCount"),
   sessionsBody: document.querySelector("#sessionsTable tbody"),
   inspector: document.getElementById("sessionInspector"),
@@ -20,6 +33,8 @@ const els = {
   anomalyList: document.getElementById("anomalyList"),
   modelSwitchMeta: document.getElementById("modelSwitchMeta"),
   modelSwitchList: document.getElementById("modelSwitchList"),
+  commandPreview: document.getElementById("commandPreview"),
+  commandButtons: Array.from(document.querySelectorAll(".cmd-btn")),
   alerts: document.getElementById("alerts"),
   generatedAt: document.getElementById("generatedAt"),
 };
@@ -28,6 +43,7 @@ const state = {
   data: null,
   selectedSessionId: null,
   inFlight: false,
+  commandMode: "summary",
 };
 
 function fmtInt(value) {
@@ -95,6 +111,14 @@ function fmtDate(value) {
   return new Date(value).toLocaleString();
 }
 
+function positiveIntFromInput(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) {
+    return null;
+  }
+  return Math.round(n);
+}
+
 function esc(value) {
   return String(value)
     .replaceAll("&", "&amp;")
@@ -125,6 +149,8 @@ function selectOptions(select, values, labelPrefix) {
 }
 
 function renderCards(data) {
+  const totalQuota = data.quota?.totalLimit ?? null;
+  const premiumQuota = data.quota?.premiumLimit ?? null;
   const cards = [
     {
       label: "Sessions In Scope",
@@ -143,14 +169,14 @@ function renderCards(data) {
       hint: `${fmtTokens(data.totals.cacheRead)} cache tokens`,
     },
     {
-      label: "Messages",
-      value: fmtInt(data.messages.total),
-      hint: `${fmtInt(data.messages.user)} user · ${fmtInt(data.messages.assistant)} assistant`,
+      label: "Requests",
+      value: fmtInt(data.summary.totalRequests),
+      hint: `${fmtInt(data.summary.billableRequests)} billable · ${fmtInt(data.summary.premiumRequests)} premium`,
     },
     {
-      label: "Error Rate",
-      value: fmtPct(data.summary.errorRatePct),
-      hint: `${fmtInt(data.messages.errors)} error events`,
+      label: "Request Failure",
+      value: fmtPct(data.summary.requestFailureRatePct),
+      hint: `${fmtInt(data.requests.failed)} failed · ${fmtInt(data.requests.timeout)} timeout`,
     },
     {
       label: "Avg Latency",
@@ -161,6 +187,23 @@ function renderCards(data) {
       label: "P95 Latency",
       value: fmtMs(data.summary.p95LatencyMs),
       hint: "tail response time",
+    },
+    {
+      label: "QMD-backed Search",
+      value: fmtPct(data.summary.qmdBackedRatePct),
+      hint: `${fmtInt(data.summary.vectorSearches)} vector searches`,
+    },
+    {
+      label: "Request Quota",
+      value: totalQuota ? `${fmtInt(data.quota.totalUsed)} / ${fmtInt(totalQuota)}` : "Unlimited",
+      hint: totalQuota ? `${fmtPct(data.quota.totalUsagePct)} used` : "not configured",
+    },
+    {
+      label: "Premium Quota",
+      value: premiumQuota
+        ? `${fmtInt(data.quota.premiumUsed)} / ${fmtInt(premiumQuota)}`
+        : "Unlimited",
+      hint: premiumQuota ? `${fmtPct(data.quota.premiumUsagePct)} used` : "not configured",
     },
   ];
 
@@ -247,6 +290,103 @@ function renderLatency(data) {
   });
 }
 
+function renderRequestTrend(data) {
+  const daily = data.aggregates.daily || [];
+  const withReq = daily.filter((d) => (d.requests ?? 0) > 0).length;
+  els.requestTrendMeta.textContent = `${withReq} days with requests`;
+  renderDualLineChart({
+    mount: els.requestTrend,
+    seriesA: daily.map((d) => d.requests ?? 0),
+    seriesB: daily.map((d) => d.premiumRequests ?? 0),
+    colorA: "#6ec8ff",
+    colorB: "#ffcf6e",
+  });
+}
+
+function renderRequestHealth(data) {
+  const daily = data.aggregates.daily || [];
+  els.requestHealthMeta.textContent = `${daily.length} days`;
+  renderDualLineChart({
+    mount: els.requestHealth,
+    seriesA: daily.map((d) => d.requestErrors ?? 0),
+    seriesB: daily.map((d) => d.requestTimeouts ?? 0),
+    colorA: "#ff8d9a",
+    colorB: "#ffd47a",
+  });
+}
+
+function renderQuota(data) {
+  const quota = data.quota || {};
+  const rows = [
+    {
+      label: "Total Requests",
+      value: quota.totalLimit ? `${fmtInt(quota.totalUsed)} / ${fmtInt(quota.totalLimit)}` : "Unlimited",
+      sub: quota.totalLimit ? `${fmtPct(quota.totalUsagePct)} used` : "No cap configured",
+    },
+    {
+      label: "Premium Requests",
+      value: quota.premiumLimit
+        ? `${fmtInt(quota.premiumUsed)} / ${fmtInt(quota.premiumLimit)}`
+        : "Unlimited",
+      sub: quota.premiumLimit ? `${fmtPct(quota.premiumUsagePct)} used` : "No cap configured",
+    },
+    {
+      label: "Remaining",
+      value: `${quota.totalRemaining ?? "∞"} total`,
+      sub: `${quota.premiumRemaining ?? "∞"} premium`,
+    },
+    {
+      label: "Billable Ratio",
+      value: fmtPct(data.requests.billableRatePct),
+      sub: `${fmtInt(data.requests.billable)} of ${fmtInt(data.requests.total)}`,
+    },
+  ];
+
+  els.quotaMeta.textContent =
+    quota.totalLimit || quota.premiumLimit ? "tracked with configured caps" : "caps not configured";
+  els.quotaCards.innerHTML = rows
+    .map(
+      (row) =>
+        `<div class="memory-cell"><span class="muted">${esc(row.label)}</span><strong>${esc(row.value)}</strong><div class="muted">${esc(row.sub)}</div></div>`,
+    )
+    .join("");
+}
+
+function renderVector(data) {
+  const vector = data.vector || {};
+  const rows = [
+    { label: "Search Calls", value: fmtInt(vector.searchCalls), sub: `${fmtInt(vector.searchSuccess)} success` },
+    { label: "Error Rate", value: fmtPct(vector.searchErrorRatePct), sub: `${fmtInt(vector.searchErrors)} errors` },
+    { label: "QMD-backed", value: fmtPct(vector.qmdBackedRatePct), sub: `${fmtInt(vector.qmdBackedSearches)} searches` },
+    {
+      label: "Latency",
+      value: `${fmtMs(vector.latency?.avgMs)} avg`,
+      sub: `${fmtMs(vector.latency?.p95Ms)} p95`,
+    },
+    {
+      label: "Avg Results",
+      value: Number(vector.avgResultsPerSearch ?? 0).toFixed(2),
+      sub: `${fmtInt(vector.totalResults)} total`,
+    },
+    {
+      label: "memory_get",
+      value: fmtInt(vector.memoryGetCalls),
+      sub: `${fmtInt(vector.qmdMemoryGetCalls)} qmd paths`,
+    },
+  ];
+  els.vectorMeta.textContent = `${fmtInt(vector.searchCalls)} searches`;
+  els.vectorStats.innerHTML = rows
+    .map(
+      (row) =>
+        `<div class="memory-cell"><span class="muted">${esc(row.label)}</span><strong>${esc(row.value)}</strong><div class="muted">${esc(row.sub)}</div></div>`,
+    )
+    .join("");
+  els.vectorCollections.innerHTML = (vector.topCollections || [])
+    .slice(0, 12)
+    .map((item) => `<span class="chip">${esc(item.collection)} · ${esc(item.count)}</span>`)
+    .join("") || '<span class="muted">No QMD collections observed.</span>';
+}
+
 function renderBars({ mount, rows, valueGetter, labelGetter, valueFormatter, emptyText = "No data" }) {
   if (!rows.length) {
     mount.innerHTML = `<div class="muted">${esc(emptyText)}</div>`;
@@ -288,6 +428,28 @@ function renderRankings(data) {
     labelGetter: (row) => row.name,
     valueFormatter: (value) => `${fmtInt(value)} calls`,
     emptyText: "No tool calls",
+  });
+}
+
+function renderRequestBreakdowns(data) {
+  renderBars({
+    mount: els.requestModels,
+    rows: (data.aggregates.byRequestModel || []).slice(0, 12),
+    valueGetter: (row) => row.total,
+    labelGetter: (row) => `${row.provider ?? "unknown"} / ${row.model ?? "unknown"}`,
+    valueFormatter: (value, row) =>
+      `${fmtInt(value)} req · ${fmtPct(value > 0 ? (row.failed / value) * 100 : 0)} fail`,
+    emptyText: "No request-model data",
+  });
+
+  renderBars({
+    mount: els.requestChannels,
+    rows: (data.aggregates.byRequestChannel || []).slice(0, 12),
+    valueGetter: (row) => row.total,
+    labelGetter: (row) => row.channel ?? "unknown",
+    valueFormatter: (value, row) =>
+      `${fmtInt(value)} req · ${fmtPct(value > 0 ? (row.premium / value) * 100 : 0)} premium`,
+    emptyText: "No request-channel data",
   });
 }
 
@@ -478,7 +640,10 @@ function renderMemory(data) {
 function renderAnomalies(data) {
   const anomalies = data.anomalies || {};
   const tokenSpikes = anomalies.tokenSpikes || [];
+  const requestSpikes = anomalies.requestSpikes || [];
+  const requestFailureSpikes = anomalies.requestFailureSpikes || [];
   const latencyJitter = anomalies.latencyJitter;
+  const qmdCoverageDrop = anomalies.qmdCoverageDrop;
   const modelSwitching = anomalies.modelSwitching || [];
 
   const anomalyCards = [];
@@ -492,6 +657,25 @@ function renderAnomalies(data) {
   if (latencyJitter) {
     anomalyCards.push(
       `<article class="alert warn"><strong>Latency Jitter</strong><div>CV ${(latencyJitter.coefficientOfVariation * 100).toFixed(1)}% · p95/avg ${latencyJitter.globalP95ToAvgRatio.toFixed(2)}x</div></article>`,
+    );
+  }
+  if (requestSpikes.length) {
+    for (const spike of requestSpikes.slice(0, 5)) {
+      anomalyCards.push(
+        `<article class="alert warn"><strong>Request Spike (${esc(spike.date)})</strong><div>${esc(fmtInt(spike.requests))} requests · ${esc(spike.ratio.toFixed(2))}x baseline</div></article>`,
+      );
+    }
+  }
+  if (requestFailureSpikes.length) {
+    for (const spike of requestFailureSpikes.slice(0, 4)) {
+      anomalyCards.push(
+        `<article class="alert bad"><strong>Failure Spike (${esc(spike.date)})</strong><div>${esc(spike.ratePct.toFixed(1))}% failure · ${esc(spike.ratio.toFixed(2))}x baseline</div></article>`,
+      );
+    }
+  }
+  if (qmdCoverageDrop) {
+    anomalyCards.push(
+      `<article class="alert info"><strong>QMD Coverage Low</strong><div>${esc(fmtPct(qmdCoverageDrop.qmdBackedRatePct))} · ${esc(fmtInt(qmdCoverageDrop.qmdBackedSearches))}/${esc(fmtInt(qmdCoverageDrop.searchCalls))} searches</div></article>`,
     );
   }
   if (!anomalyCards.length) {
@@ -535,6 +719,41 @@ function renderAlerts(data) {
     .join("");
 }
 
+async function refreshCommandPreview() {
+  if (!state.data) {
+    return;
+  }
+  try {
+    const params = new URLSearchParams();
+    params.set("cmd", state.commandMode || "summary");
+    params.set("days", els.days.value || "30");
+    if (els.agent.value) {
+      params.set("agent", els.agent.value);
+    }
+    if (els.channel.value) {
+      params.set("channel", els.channel.value);
+    }
+    const reqQuota = positiveIntFromInput(els.requestQuota.value);
+    const premiumQuota = positiveIntFromInput(els.premiumQuota.value);
+    if (reqQuota) {
+      params.set("requestQuota", String(reqQuota));
+    }
+    if (premiumQuota) {
+      params.set("premiumQuota", String(premiumQuota));
+    }
+    params.set("maxItems", "8");
+    const res = await fetch(`/api/command?${params.toString()}`, { cache: "no-store" });
+    const payload = await res.json();
+    if (!payload.ok) {
+      throw new Error(payload.error || "command preview failed");
+    }
+    els.commandPreview.textContent = payload.text || "(empty command output)";
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    els.commandPreview.textContent = `command preview failed: ${message}`;
+  }
+}
+
 function updateFiltersFromData(data) {
   selectOptions(els.agent, data.filters.options.agents || [], "All agents");
   selectOptions(els.channel, data.filters.options.channels || [], "All channels");
@@ -543,13 +762,19 @@ function updateFiltersFromData(data) {
 function renderAll(data) {
   renderCards(data);
   renderTrend(data);
+  renderRequestTrend(data);
+  renderRequestHealth(data);
+  renderQuota(data);
+  renderVector(data);
   renderLatency(data);
   renderRankings(data);
+  renderRequestBreakdowns(data);
   renderSessions(data);
   renderMemory(data);
   renderAnomalies(data);
   renderAlerts(data);
   els.generatedAt.textContent = `Generated ${fmtDate(data.generatedAt)} · range: ${data.range.days}`;
+  void refreshCommandPreview();
 }
 
 async function fetchData() {
@@ -570,6 +795,14 @@ async function fetchData() {
     params.set("sessionLimit", "300");
     params.set("memoryLimit", "120");
     params.set("timelineLimit", "300");
+    const requestQuota = positiveIntFromInput(els.requestQuota.value);
+    const premiumQuota = positiveIntFromInput(els.premiumQuota.value);
+    if (requestQuota) {
+      params.set("requestQuota", String(requestQuota));
+    }
+    if (premiumQuota) {
+      params.set("premiumQuota", String(premiumQuota));
+    }
 
     const res = await fetch(`/api/collect?${params.toString()}`, { cache: "no-store" });
     const payload = await res.json();
@@ -595,6 +828,29 @@ function bindEvents() {
   els.days.addEventListener("change", fetchData);
   els.agent.addEventListener("change", fetchData);
   els.channel.addEventListener("change", fetchData);
+  els.requestQuota.addEventListener("change", () => {
+    localStorage.setItem("openclaw_observatory_request_quota", els.requestQuota.value || "");
+    fetchData();
+  });
+  els.premiumQuota.addEventListener("change", () => {
+    localStorage.setItem("openclaw_observatory_premium_quota", els.premiumQuota.value || "");
+    fetchData();
+  });
+  for (const button of els.commandButtons) {
+    button.addEventListener("click", () => {
+      state.commandMode = button.getAttribute("data-cmd") || "summary";
+      for (const btn of els.commandButtons) {
+        btn.classList.toggle("active", btn === button);
+      }
+      void refreshCommandPreview();
+    });
+  }
+}
+
+els.requestQuota.value = localStorage.getItem("openclaw_observatory_request_quota") || "";
+els.premiumQuota.value = localStorage.getItem("openclaw_observatory_premium_quota") || "";
+for (const button of els.commandButtons) {
+  button.classList.toggle("active", button.getAttribute("data-cmd") === state.commandMode);
 }
 
 bindEvents();

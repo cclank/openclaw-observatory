@@ -127,6 +127,7 @@ label {
 }
 
 select,
+input,
 button {
   appearance: none;
   border-radius: 12px;
@@ -143,6 +144,10 @@ button {
   border: 0;
   color: #08111d;
   font-weight: 700;
+}
+
+input::placeholder {
+  color: #91a9c4;
 }
 
 .cards {
@@ -472,6 +477,39 @@ tbody tr:hover {
 .alerts {
   display: grid;
   gap: 8px;
+}
+
+.command-toolbar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.cmd-btn {
+  background: rgba(17, 36, 58, 0.82);
+  border: 1px solid rgba(122, 163, 208, 0.34);
+  color: #d6edff;
+  font-weight: 600;
+}
+
+.cmd-btn.active {
+  background: linear-gradient(135deg, #2aa1d3, #ffaa61);
+  color: #071221;
+}
+
+.command-preview {
+  margin: 0;
+  border: 1px solid rgba(122, 163, 208, 0.28);
+  border-radius: 12px;
+  padding: 10px;
+  background: rgba(6, 13, 23, 0.72);
+  color: #dbf0ff;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  max-height: 280px;
+  overflow: auto;
 }
 
 .alert {

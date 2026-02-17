@@ -1,228 +1,233 @@
 # OpenClaw Observatory
 
-OpenClaw Observatory is a standalone observability project for OpenClaw.
-It reads local runtime artifacts and renders a rich dashboard for:
+Standalone observability project for OpenClaw with rich dashboards, command-style summaries, and non-invasive local data collection.
 
-- token consumption and cost
-- response latency and tail behavior
-- model and tool usage mix
-- session-level waterfall timeline
-- memory footprint and memory file details
-- anomaly detection (token spike, latency jitter, model switching)
+## Highlights
 
-## Design Goals
+- Request-centric observability (GitHub Copilot-style count mindset):
+  - total/billable/premium requests
+  - success/failure/timeout/cancelled breakdown
+  - quota usage and near-limit alerts
+- Token/cost/latency monitoring:
+  - total and daily trends
+  - p95 latency and jitter detection
+  - model/provider and tool distribution
+- QMD/vector retrieval monitoring:
+  - `memory_search` / vector call volume
+  - QMD-backed ratio, retrieval error rate
+  - result count, latency, top queries/collections/paths
+  - `memory_get` qmd-path usage
+- Session deep inspection:
+  - session-level waterfall timeline
+  - recent timeline events
+  - model switching details
+- Bot-command output for Telegram/Discord:
+  - `summary`, `quota`, `qmd`, `alerts`, `daily`
+  - available via CLI and HTTP endpoint
 
-- Non-invasive: no patching of OpenClaw runtime code paths
-- Portable: fully contained under `tools/openclaw-observatory`
-- Fast iteration: plain Node.js ESM scripts, no framework lock-in
-- Read-only data collection from local state directories
+## Design Principles
+
+- Non-invasive: reads OpenClaw state files, does not patch OpenClaw runtime
+- Standalone: all code under this repo root
+- Read-only analytics: local filesystem scan only
 
 ## Project Layout
 
 ```text
-tools/openclaw-observatory/
-├─ collector.mjs         # data collector + aggregation + anomaly rules
-├─ server.mjs            # lightweight HTTP server and /api/collect endpoint
-├─ package.json          # standalone scripts for this project
+.
+├─ collector.mjs          # collector + aggregation + anomaly/alert rules + command formatter
+├─ server.mjs             # dashboard server + APIs
+├─ bot-command.mjs        # CLI command-summary entrypoint for bot usage
+├─ package.json
 ├─ public/
-│  ├─ index.html         # dashboard shell
-│  ├─ app.js             # dashboard rendering logic
-│  └─ styles.css         # visual theme and responsive layout
+│  ├─ index.html          # dashboard UI
+│  ├─ app.js              # dashboard rendering + command preview
+│  └─ styles.css
 └─ README.md
 ```
 
 ## Requirements
 
 - Node.js `22+`
-- Local OpenClaw runtime artifacts, usually:
-  - `~/.openclaw/agents/*/sessions/*.jsonl`
-  - `~/.openclaw/agents/*/sessions/sessions.json`
-  - `~/.openclaw/workspace/memory/**/*.md` (or custom workspace dir)
+- OpenClaw runtime data directory (default resolves to `~/.openclaw`)
 
 ## Quick Start
 
-From repository root:
-
 ```bash
-node tools/openclaw-observatory/server.mjs --port 3188
-```
-
-Open:
-
-- `http://127.0.0.1:3188`
-
-Or run via local project scripts:
-
-```bash
-cd tools/openclaw-observatory
 npm run start -- --port 3188
 ```
 
-## Run Collector Only (JSON Snapshot)
+Open dashboard:
+
+- `http://127.0.0.1:3188`
+
+## Scripts
+
+- `npm run start` - launch server
+- `npm run dev` - launch server with shorter cache TTL
+- `npm run collect -- ...` - run collector snapshot
+- `npm run command -- ...` - output compact bot command summary
+- `npm run check` - syntax checks
+
+## Collector Usage
+
+JSON snapshot:
 
 ```bash
-node tools/openclaw-observatory/collector.mjs \
-  --days 30 \
-  --pretty \
-  --out /tmp/openclaw-observability.json
+node collector.mjs --days 30 --pretty --out /tmp/openclaw-observability.json
+```
+
+Command summary text:
+
+```bash
+node collector.mjs --days 7 --command summary
+node collector.mjs --days 7 --command qmd
+node collector.mjs --days 7 --command alerts --max-items 10
+```
+
+Dedicated bot command entry:
+
+```bash
+node bot-command.mjs --cmd summary --days 7
 ```
 
 ## CLI Options
 
-Collector (`collector.mjs`):
+Common (`collector.mjs` and `bot-command.mjs`):
 
-- `--days <n|all>`: time window, default `30`
-- `--agent <id>`: filter by agent ID
-- `--channel <name>`: filter by channel/provider
-- `--session-limit <n>`: max sessions returned, default `250`
-- `--memory-limit <n>`: max memory files returned, default `100`
-- `--timeline-limit <n>`: max timeline/waterfall events per session, default `240`
-- `--state-dir <path>`: OpenClaw state dir
-- `--workspace-dir <path>`: workspace dir for memory scanning
-- `--out <file>`: write JSON output to file
-- `--pretty`: pretty-print JSON
+- `--days <n|all>`: window, default `30`
+- `--agent <id>`: filter by agent
+- `--channel <name>`: filter by channel
+- `--session-limit <n>`: session cap, default `250`
+- `--memory-limit <n>`: memory file cap, default `100`
+- `--timeline-limit <n>`: timeline/waterfall cap per session, default `240`
+- `--state-dir <path>`: OpenClaw state directory
+- `--workspace-dir <path>`: workspace directory
+- `--request-quota <n>`: total request quota (for usage tracking/alerts)
+- `--premium-quota <n>`: premium request quota
+- `--premium-model-pattern <regex>`: override premium-model detection
+- `--command <summary|quota|qmd|alerts|daily|help>`: output compact command text
+- `--max-items <n>`: max rows in command output
+- `--out <file>`: write output to file
+- `--pretty`: pretty JSON (collector JSON mode)
 
 Server (`server.mjs`):
 
 - `--host <ip>`: bind host, default `127.0.0.1`
 - `--port <n>`: bind port, default `3188`
-- `--cache-ms <n>`: cache TTL for collection payload, default `15000`
-- `--state-dir <path>`: fixed state dir
-- `--workspace-dir <path>`: fixed workspace dir
+- `--cache-ms <n>`: collection cache TTL, default `15000`
+- `--state-dir <path>`
+- `--workspace-dir <path>`
+- `--request-quota <n>`
+- `--premium-quota <n>`
+- `--premium-model-pattern <regex>`
 
-## Dashboard Features
+## HTTP APIs
 
-- KPI cards: sessions/tokens/cost/error-rate/cache-share
-- Daily trends: token and cost evolution
-- Latency panel: average and p95 response time
-- Distribution panels: top models and top tools
-- Session table + inspector:
-  - per-session summary
-  - waterfall spans (user to assistant latency bars)
-  - recent timeline events (tools, errors, usage snippets)
-- Memory panels:
-  - total files/bytes/recency
-  - keyword hotspots
-  - latest memory file list
-- Anomaly radar:
-  - token spike vs rolling baseline
-  - latency jitter (coefficient of variation + p95/avg tail ratio)
-  - model switching sessions
-- Operational alert list:
-  - high token volume
-  - error rate and latency warnings
-  - anomaly-derived alerts
+### `GET /api/health`
 
-## API
+Health check.
 
-### Health
+### `GET /api/collect`
 
-- `GET /api/health`
+Returns full dashboard JSON payload.
 
-Example response:
+Query params:
 
-```json
-{ "ok": true, "now": 1739726400000 }
-```
+- `days`, `agent`, `channel`
+- `sessionLimit`, `memoryLimit`, `timelineLimit`
+- `requestQuota`, `premiumQuota`, `premiumModelPattern`
 
-### Metrics Collection
+### `GET /api/command`
 
-- `GET /api/collect`
-
-Query parameters:
-
-- `days` (`1`, `7`, `30`, `90`, `all`)
-- `agent` (optional)
-- `channel` (optional)
-- `sessionLimit` (optional)
-- `memoryLimit` (optional)
-- `timelineLimit` (optional)
-
-Example:
-
-```text
-/api/collect?days=30&sessionLimit=250&memoryLimit=100&timelineLimit=240
-```
-
-Response shape (high-level):
+Returns JSON command summary:
 
 ```json
 {
   "ok": true,
-  "data": {
-    "generatedAt": 0,
-    "stateDir": "",
-    "workspaceDir": "",
-    "range": { "days": 30, "startIso": "", "endIso": "" },
-    "filters": { "selected": {}, "options": {} },
-    "summary": {},
-    "totals": {},
-    "messages": {},
-    "latency": {},
-    "aggregates": {},
-    "sessions": [],
-    "memory": {},
-    "anomalies": {},
-    "alerts": []
-  }
+  "command": "summary",
+  "text": "..."
 }
 ```
 
+Query params:
+
+- `cmd`: `summary|quota|qmd|alerts|daily|help`
+- same filters/quota params as `/api/collect`
+- `maxItems`
+
+### `GET /command.txt`
+
+Returns plain-text command output for direct bot forwarding.
+
+## Telegram / Discord Command Integration
+
+Use `command.txt` for a minimal integration layer.
+
+Examples:
+
+```text
+http://127.0.0.1:3188/command.txt?cmd=summary&days=7
+http://127.0.0.1:3188/command.txt?cmd=qmd&days=7&agent=main
+http://127.0.0.1:3188/command.txt?cmd=quota&days=30&requestQuota=2000&premiumQuota=300
+```
+
+Recommended command mapping:
+
+- `/oc summary` -> `cmd=summary`
+- `/oc quota` -> `cmd=quota`
+- `/oc qmd` -> `cmd=qmd`
+- `/oc alerts` -> `cmd=alerts`
+- `/oc daily` -> `cmd=daily`
+
+## Dashboard Coverage
+
+- KPI cards for requests/tokens/cost/latency/quota
+- Daily token/cost trend
+- Daily request and request-health trend
+- Quota panel + vector/QMD panel
+- Top models/tools + request-by-model/request-by-channel
+- Session table + waterfall + timeline inspector
+- Memory footprint panel
+- Anomaly radar + operational alerts
+- Built-in command preview (same output as bot command endpoint)
+
 ## Metric Semantics
 
-- Token fields:
-  - `input`, `output`, `cacheRead`, `cacheWrite`, `totalTokens`
-- Cost fields:
-  - `totalCost`, plus optional cost breakdown fields when available
-  - if transcript cost is unavailable, collector increments `missingCostEntries`
+- Request:
+  - one assistant response attempt is treated as one request
+  - billable requests are inferred from usage/model/provider metadata
+  - premium requests are model-name heuristic based (or regex override)
 - Latency:
-  - uses explicit `durationMs` when present
-  - fallback: `assistant_timestamp - previous_user_timestamp`
-- Error classification:
-  - from stop reasons (`error`, `aborted`, `cancelled`, `timeout`) and tool result flags
+  - prefers `durationMs`
+  - fallback to `assistant_ts - previous_user_ts` when possible
+- QMD/vector:
+  - retrieval calls inferred from tool usage (`memory_search` and vector-like tool names)
+  - QMD-backed detection from provider and `qmd/...` result paths
+- Cost:
+  - from transcript usage/cost metadata
+  - missing cost entries are counted
 
 ## Environment Variables
 
-When CLI args are not provided:
-
 - `OPENCLAW_STATE_DIR`
 - `OPENCLAW_WORKSPACE_DIR`
+- `OPENCLAW_REQUEST_QUOTA`
+- `OPENCLAW_PREMIUM_REQUEST_QUOTA`
+- `OPENCLAW_PREMIUM_MODEL_PATTERN`
 
-Defaults:
-
-- `stateDir`: `~/.openclaw`
-- `workspaceDir`: `<stateDir>/workspace`
-
-## Troubleshooting
-
-- Empty dashboard data:
-  - verify OpenClaw state exists under the selected `stateDir`
-  - verify session files are `*.jsonl`
-- Memory panels empty:
-  - verify `workspace/memory` exists
-  - pass `--workspace-dir` explicitly
-- Slow initial refresh:
-  - expected for large state trees; increase `--cache-ms`
-- Port conflict:
-  - run server with a different `--port`
-
-## Security and Privacy Notes
-
-- Collector reads local files only and does not transmit data externally.
-- Dashboard serves local HTTP on configured host/port.
-- Avoid exposing the server on public interfaces unless intentionally secured.
-
-## Development
+## Validation
 
 ```bash
-cd tools/openclaw-observatory
 npm run check
-npm run collect -- --days 7 --pretty
-npm run start -- --port 3188
+node collector.mjs --days 7 --command summary
+node collector.mjs --days 7 --command qmd
+node server.mjs --port 3188
 ```
 
 ## Known Limits
 
-- Session parsing is best-effort: malformed files are skipped.
-- Cost analytics depend on provider usage metadata completeness.
-- Anomaly rules are heuristics and should be interpreted as guidance.
+- Transcript parsing is best-effort; malformed lines are skipped
+- Metrics depend on transcript metadata completeness
+- QMD/vector detection is heuristic for generic tool ecosystems
+- Anomaly rules are signal-oriented heuristics, not hard SLO guarantees
