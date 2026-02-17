@@ -48,6 +48,17 @@ It provides dashboard analytics and bot-friendly command summaries for request u
 - Standalone: no runtime patching in OpenClaw core
 - Read-only collection: local filesystem scan only
 
+## Non-Invasive Guarantee
+
+This project does not modify upstream OpenClaw source code or runtime behavior.
+
+- No patching of OpenClaw internals
+- No write-back to OpenClaw session/state files
+- No dependency injection into OpenClaw runtime paths
+- All implementation remains isolated in this repository
+
+It only reads local artifacts for observability and presents derived metrics.
+
 ## Requirements
 
 - Node.js `22+`
@@ -169,6 +180,10 @@ node collector.mjs --days 7 --command summary
 node collector.mjs --days 7 --command qmd
 node server.mjs --port 3188
 ```
+
+## License
+
+MIT. See [LICENSE](LICENSE).
 
 ## Limitations
 

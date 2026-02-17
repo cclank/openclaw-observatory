@@ -50,6 +50,17 @@ OpenClaw Observatory 是一个面向 OpenClaw 的独立可观测性工具集。
 - 独立化：不修改 OpenClaw 核心运行路径
 - 只读采集：本地文件系统扫描，不写入业务数据
 
+## 零侵入保证
+
+本项目不会修改上游 OpenClaw 的源码或运行行为。
+
+- 不 patch OpenClaw 内部实现
+- 不回写 OpenClaw 会话/状态文件
+- 不注入 OpenClaw 运行时依赖路径
+- 全部实现仅保留在本仓库内
+
+它只读取本地产物做观测分析，并输出派生指标与视图。
+
 ## 运行要求
 
 - Node.js `22+`
@@ -171,6 +182,10 @@ node collector.mjs --days 7 --command summary
 node collector.mjs --days 7 --command qmd
 node server.mjs --port 3188
 ```
+
+## 许可证
+
+MIT，见 [LICENSE](LICENSE)。
 
 ## 已知限制
 
