@@ -49,6 +49,7 @@ async function main() {
   const text = buildCommandText(payload, {
     command,
     maxItems: asNumber(args["max-items"], 6),
+    lang: typeof args.lang === "string" ? args.lang : undefined,
   });
   process.stdout.write(`${text}\n`);
 }

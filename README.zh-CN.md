@@ -28,8 +28,12 @@ OpenClaw Observatory 是一个面向 OpenClaw 的独立可观测性工具集。
   - 瀑布图时间线
   - 关键事件明细
   - 模型切换统计
+- 双语 Dashboard
+  - 支持中英文切换（zh-CN / en）
+- 关键文件访问监控
+  - `AGENT.md`、`TOOLS.md`、`SOUL.md`、`Memory` 的每日访问趋势与排行
 - Telegram/Discord 命令摘要输出
-  - `summary`、`quota`、`qmd`、`alerts`、`daily`
+  - `summary`、`quota`、`qmd`、`alerts`、`daily`、`weekly`
 
 ## 架构说明
 
@@ -110,6 +114,7 @@ node collector.mjs --days 30 --pretty --out /tmp/openclaw-observability.json
 node collector.mjs --days 7 --command summary
 node collector.mjs --days 7 --command qmd
 node collector.mjs --days 7 --command alerts --max-items 10
+node collector.mjs --days 7 --command weekly --lang zh
 ```
 
 机器人命令入口：
@@ -138,6 +143,7 @@ node bot-command.mjs --cmd summary --days 7
 - `qmd`
 - `alerts`
 - `daily`
+- `weekly`
 - `help`
 
 ## Telegram / Discord 集成建议
@@ -149,6 +155,7 @@ node bot-command.mjs --cmd summary --days 7
 - `/oc qmd` -> `cmd=qmd`
 - `/oc alerts` -> `cmd=alerts`
 - `/oc daily` -> `cmd=daily`
+- `/oc weekly` -> `cmd=weekly`
 
 示例地址：
 
@@ -164,6 +171,7 @@ http://127.0.0.1:3188/command.txt?cmd=summary&days=7
 - `sessionLimit`、`memoryLimit`、`timelineLimit`
 - `requestQuota`、`premiumQuota`
 - `premiumModelPattern`
+- `lang`（`zh` 或 `en`，仅命令摘要输出）
 - `maxItems`（命令摘要最大条目数）
 
 ## 环境变量

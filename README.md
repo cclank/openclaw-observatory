@@ -26,8 +26,12 @@ It provides dashboard analytics and bot-friendly command summaries for request u
 - Session diagnostics
   - per-session waterfall timeline
   - timeline events and model switching details
+- Bilingual dashboard UI
+  - zh-CN / en language toggle
+- Key-file access analytics
+  - daily access counts for `AGENT.md`, `TOOLS.md`, `SOUL.md`, and `Memory`
 - Chat-command output for Telegram/Discord
-  - `summary`, `quota`, `qmd`, `alerts`, `daily`
+  - `summary`, `quota`, `qmd`, `alerts`, `daily`, `weekly`
 
 ## Architecture
 
@@ -108,6 +112,7 @@ Run command summary (text):
 node collector.mjs --days 7 --command summary
 node collector.mjs --days 7 --command qmd
 node collector.mjs --days 7 --command alerts --max-items 10
+node collector.mjs --days 7 --command weekly --lang zh
 ```
 
 Bot-oriented command entry:
@@ -136,6 +141,7 @@ Supported `cmd` values:
 - `qmd`
 - `alerts`
 - `daily`
+- `weekly`
 - `help`
 
 ## Telegram / Discord Integration Pattern
@@ -147,6 +153,7 @@ Recommended mapping:
 - `/oc qmd` -> `cmd=qmd`
 - `/oc alerts` -> `cmd=alerts`
 - `/oc daily` -> `cmd=daily`
+- `/oc weekly` -> `cmd=weekly`
 
 Example endpoint:
 
@@ -162,6 +169,7 @@ Common options (`collector.mjs`, `bot-command.mjs`, and API query):
 - `sessionLimit`, `memoryLimit`, `timelineLimit`
 - `requestQuota`, `premiumQuota`
 - `premiumModelPattern`
+- `lang` (`zh` or `en`, command output only)
 - `maxItems` (command output)
 
 ## Environment Variables

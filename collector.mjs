@@ -47,6 +47,28 @@ const PREMIUM_MODEL_HINTS = [
 const TOOL_CALL_TYPES = new Set(["tool_use", "toolcall", "tool_call"]);
 const TOOL_RESULT_TYPES = new Set(["tool_result", "tool_result_error"]);
 const VECTOR_TOOL_HINTS = ["memory_search", "qmd", "vector", "semantic", "embedding"];
+const KEY_FILE_DEFINITIONS = [
+  {
+    key: "agentMd",
+    label: "AGENT.md",
+    patterns: [/agent\.md/gi],
+  },
+  {
+    key: "toolsMd",
+    label: "TOOLS.md",
+    patterns: [/tools\.md/gi],
+  },
+  {
+    key: "soulMd",
+    label: "SOUL.md",
+    patterns: [/soul\.md/gi],
+  },
+  {
+    key: "memory",
+    label: "Memory",
+    patterns: [/(?:^|[\\/\s'"])memory[\\/][^\s'"]+/gi, /\bmemory\.(?:md|mdx|txt)\b/gi],
+  },
+];
 
 function parseArgs(argv) {
   const out = {};
@@ -69,6 +91,53 @@ function parseArgs(argv) {
 
 function toFinite(value) {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function emptyKeyFileCounts() {
+  const counts = {};
+  for (const item of KEY_FILE_DEFINITIONS) {
+    counts[item.key] = 0;
+  }
+  return counts;
+}
+
+function mergeKeyFileCounts(target, source) {
+  for (const item of KEY_FILE_DEFINITIONS) {
+    const key = item.key;
+    target[key] = (target[key] ?? 0) + (source?.[key] ?? 0);
+  }
+}
+
+function countMatches(text, pattern) {
+  const matches = text.match(pattern);
+  return Array.isArray(matches) ? matches.length : 0;
+}
+
+function collectKeyFileHits(text) {
+  const counts = emptyKeyFileCounts();
+  if (typeof text !== "string" || !text) {
+    return counts;
+  }
+  for (const item of KEY_FILE_DEFINITIONS) {
+    const matched = item.patterns.some((pattern) => countMatches(text, pattern) > 0);
+    if (matched) {
+      counts[item.key] += 1;
+    }
+  }
+  return counts;
+}
+
+function hasKeyFileHits(counts) {
+  return KEY_FILE_DEFINITIONS.some((item) => (counts[item.key] ?? 0) > 0);
+}
+
+function addKeyFileHitsToDailyMap(dailyMap, dayKey, counts) {
+  if (!dayKey) {
+    return;
+  }
+  const current = dailyMap.get(dayKey) ?? emptyKeyFileCounts();
+  mergeKeyFileCounts(current, counts);
+  dailyMap.set(dayKey, current);
 }
 
 function asRecord(value) {
@@ -724,6 +793,8 @@ async function parseSessionFile(params) {
   const timeline = [];
   const waterfall = [];
   const activityDates = new Set();
+  const keyFileTotals = emptyKeyFileCounts();
+  const keyFileDailyMap = new Map();
 
   let firstActivity;
   let lastActivity;
@@ -752,6 +823,7 @@ async function parseSessionFile(params) {
       continue;
     }
     const message = asRecord(record.message) ?? {};
+    const rawText = extractText(message.content);
     const role =
       typeof message.role === "string" &&
       ["user", "assistant", "tool", "toolResult"].includes(message.role)
@@ -826,12 +898,20 @@ async function parseSessionFile(params) {
       if (!useName) {
         continue;
       }
+      const usePath = typeof use.input?.path === "string" ? use.input.path.trim() : "";
       if (use.id) {
         pendingToolCalls.set(use.id, {
           name: useName,
           query: typeof use.input?.query === "string" ? use.input.query.trim() : null,
-          path: typeof use.input?.path === "string" ? use.input.path.trim() : null,
+          path: usePath || null,
         });
+      }
+      if (usePath) {
+        const pathHits = collectKeyFileHits(usePath);
+        if (hasKeyFileHits(pathHits)) {
+          mergeKeyFileCounts(keyFileTotals, pathHits);
+          addKeyFileHitsToDailyMap(keyFileDailyMap, dayKey, pathHits);
+        }
       }
 
       if (isMemorySearchToolName(useName) || isVectorSearchToolName(useName)) {
@@ -850,7 +930,7 @@ async function parseSessionFile(params) {
         if (dayBucket) {
           dayBucket.memoryGetCalls += 1;
         }
-        const memoryPath = typeof use.input?.path === "string" ? use.input.path.trim() : "";
+        const memoryPath = usePath;
         if (memoryPath.toLowerCase().startsWith("qmd/")) {
           vectorStats.qmdMemoryGetCalls += 1;
           if (dayBucket) {
@@ -982,7 +1062,7 @@ async function parseSessionFile(params) {
       resultBlocks.push({
         id: null,
         isError: false,
-        text: extractText(message.content),
+        text: rawText,
       });
     }
 
@@ -1091,13 +1171,27 @@ async function parseSessionFile(params) {
       }
 
       if (isMemoryGetToolName(resolvedToolName)) {
-        let pathCandidate = pending?.path ?? null;
+        const pendingPath = typeof pending?.path === "string" ? pending.path.trim() : "";
+        let pathCandidate = null;
         const payload = parseJsonLoose(resultBlock.text);
         const payloadRecord = asRecord(payload);
-        if (!pathCandidate && typeof payloadRecord?.path === "string") {
+        if (typeof payloadRecord?.path === "string" && payloadRecord.path.trim()) {
           pathCandidate = payloadRecord.path.trim();
+        } else if (pendingPath) {
+          pathCandidate = pendingPath;
         }
-        if (pathCandidate && pathCandidate.toLowerCase().startsWith("qmd/")) {
+        if (pathCandidate) {
+          const sameAsPending =
+            pendingPath && pathCandidate.toLowerCase() === pendingPath.toLowerCase();
+          if (!sameAsPending) {
+            const pathHits = collectKeyFileHits(pathCandidate);
+            if (hasKeyFileHits(pathHits)) {
+              mergeKeyFileCounts(keyFileTotals, pathHits);
+              addKeyFileHitsToDailyMap(keyFileDailyMap, dayKey, pathHits);
+            }
+          }
+        }
+        if (!pendingPath && pathCandidate && pathCandidate.toLowerCase().startsWith("qmd/")) {
           vectorStats.qmdMemoryGetCalls += 1;
           if (dayBucket) {
             dayBucket.qmdMemoryGetCalls += 1;
@@ -1215,7 +1309,7 @@ async function parseSessionFile(params) {
         toolResults: tools.results,
         isError: entryIsError,
         stopReason: stopReason ?? null,
-        text: trimSnippet(extractText(message.content), 140),
+        text: trimSnippet(rawText, 140),
       });
     }
 
@@ -1237,7 +1331,7 @@ async function parseSessionFile(params) {
     }
 
     if (role) {
-      const text = trimSnippet(extractText(message.content));
+      const text = trimSnippet(rawText);
       if (text) {
         preview.push({
           timestamp: timestampMs,
@@ -1335,6 +1429,18 @@ async function parseSessionFile(params) {
         tools: entry.systemPromptReport.tools,
       }
     : null;
+  const keyFilesDaily = Array.from(keyFileDailyMap.entries())
+    .map(([date, counts]) => ({
+      date,
+      counts,
+      total: KEY_FILE_DEFINITIONS.reduce((sum, item) => sum + (counts[item.key] ?? 0), 0),
+    }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const keyFilesTotals = KEY_FILE_DEFINITIONS.map((item) => ({
+    key: item.key,
+    label: item.label,
+    count: keyFileTotals[item.key] ?? 0,
+  }));
 
   return {
     id: `${agentId}:${stem}`,
@@ -1385,6 +1491,11 @@ async function parseSessionFile(params) {
     modelSwitches,
     uniqueModels: uniqueModelKeys.size,
     activityDates: Array.from(activityDates).sort((a, b) => a.localeCompare(b)),
+    keyFiles: {
+      totals: keyFilesTotals,
+      daily: keyFilesDaily,
+      totalHits: keyFilesTotals.reduce((sum, item) => sum + item.count, 0),
+    },
   };
 }
 
@@ -1848,6 +1959,8 @@ function aggregateSessions({ sessions, filter }) {
   const byRequestAgentMap = new Map();
   const byRequestChannelMap = new Map();
   const dailyMap = new Map();
+  const keyFileDailyMap = new Map();
+  const keyFileTotals = emptyKeyFileCounts();
   const contextRows = [];
 
   const latency = {
@@ -2072,6 +2185,18 @@ function aggregateSessions({ sessions, filter }) {
       dailyMap.set(day.date, daily);
     }
 
+    for (const row of session.keyFiles?.daily ?? []) {
+      const current = keyFileDailyMap.get(row.date) ?? emptyKeyFileCounts();
+      mergeKeyFileCounts(current, row.counts);
+      keyFileDailyMap.set(row.date, current);
+    }
+    for (const item of session.keyFiles?.totals ?? []) {
+      if (!item?.key) {
+        continue;
+      }
+      keyFileTotals[item.key] = (keyFileTotals[item.key] ?? 0) + (item.count ?? 0);
+    }
+
     if (session.contextWeight?.systemPrompt?.chars) {
       contextRows.push({
         id: session.id,
@@ -2189,6 +2314,18 @@ function aggregateSessions({ sessions, filter }) {
 
   const sortRequestRows = (a, b) =>
     b.total - a.total || b.premium - a.premium || b.cost - a.cost || b.tokens - a.tokens;
+  const keyFilesDaily = Array.from(keyFileDailyMap.entries())
+    .map(([date, counts]) => ({
+      date,
+      counts,
+      total: KEY_FILE_DEFINITIONS.reduce((sum, item) => sum + (counts[item.key] ?? 0), 0),
+    }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const keyFilesTotals = KEY_FILE_DEFINITIONS.map((item) => ({
+    key: item.key,
+    label: item.label,
+    count: keyFileTotals[item.key] ?? 0,
+  }));
 
   return {
     filtered,
@@ -2196,6 +2333,11 @@ function aggregateSessions({ sessions, filter }) {
     messages,
     requests: requestStats,
     vector: vectorStats,
+    keyFiles: {
+      totals: keyFilesTotals,
+      daily: keyFilesDaily,
+      totalHits: keyFilesTotals.reduce((sum, item) => sum + item.count, 0),
+    },
     latency: latencyStats,
     aggregates: {
       daily,
@@ -2471,11 +2613,13 @@ export async function collectOpenClawMetrics(options = {}) {
       qmdBackedRatePct: aggregated.vector.qmdBackedRatePct,
       avgLatencyMs: aggregated.latency?.avgMs ?? null,
       p95LatencyMs: aggregated.latency?.p95Ms ?? null,
+      keyFileAccessHits: aggregated.keyFiles?.totalHits ?? 0,
     },
     totals: aggregated.totals,
     messages: aggregated.messages,
     requests: aggregated.requests,
     vector: aggregated.vector,
+    keyFiles: aggregated.keyFiles,
     quota,
     latency: aggregated.latency,
     aggregates: aggregated.aggregates,
@@ -2538,21 +2682,26 @@ function compactMs(value) {
 export function buildCommandText(payload, options = {}) {
   const command = typeof options.command === "string" ? options.command.trim().toLowerCase() : "summary";
   const maxItems = Math.max(1, asNumber(options.maxItems, 6));
+  const isZh = typeof options.lang === "string" && options.lang.toLowerCase().startsWith("zh");
+  const L = (zh, en) => (isZh ? zh : en);
+  const locale = isZh ? "zh-CN" : "en-US";
   const range = payload?.range?.days ?? "30";
   const summary = payload?.summary ?? {};
   const requests = payload?.requests ?? {};
   const vector = payload?.vector ?? {};
   const quota = payload?.quota ?? {};
   const generatedAt =
-    typeof payload?.generatedAt === "number" ? new Date(payload.generatedAt).toLocaleString() : "-";
+    typeof payload?.generatedAt === "number"
+      ? new Date(payload.generatedAt).toLocaleString(locale)
+      : "-";
 
   if (command === "quota") {
     const lines = [
-      `OpenClaw Quota (${range}d)`,
-      `Requests: ${compactInt(quota.totalUsed)} / ${quota.totalLimit ?? "unlimited"} (${compactPct(quota.totalUsagePct ?? 0)})`,
-      `Premium: ${compactInt(quota.premiumUsed)} / ${quota.premiumLimit ?? "unlimited"} (${compactPct(quota.premiumUsagePct ?? 0)})`,
-      `Remaining: total ${quota.totalRemaining ?? "∞"} · premium ${quota.premiumRemaining ?? "∞"}`,
-      `Generated: ${generatedAt}`,
+      `${L("OpenClaw 配额", "OpenClaw Quota")} (${range}d)`,
+      `${L("请求", "Requests")}: ${compactInt(quota.totalUsed)} / ${quota.totalLimit ?? L("不限", "unlimited")} (${compactPct(quota.totalUsagePct ?? 0)})`,
+      `${L("高级", "Premium")}: ${compactInt(quota.premiumUsed)} / ${quota.premiumLimit ?? L("不限", "unlimited")} (${compactPct(quota.premiumUsagePct ?? 0)})`,
+      `${L("剩余", "Remaining")}: ${L("总量", "total")} ${quota.totalRemaining ?? "∞"} · ${L("高级", "premium")} ${quota.premiumRemaining ?? "∞"}`,
+      `${L("生成时间", "Generated")}: ${generatedAt}`,
     ];
     return lines.join("\n");
   }
@@ -2567,64 +2716,91 @@ export function buildCommandText(payload, options = {}) {
       .map((item) => `${item.query}(${compactInt(item.count)})`)
       .join(" | ");
     const lines = [
-      `OpenClaw QMD/Vector (${range}d)`,
-      `Searches: ${compactInt(vector.searchCalls)} · QMD-backed ${compactPct(vector.qmdBackedRatePct)}`,
-      `Errors: ${compactPct(vector.searchErrorRatePct)} · Avg results ${Number(vector.avgResultsPerSearch ?? 0).toFixed(2)}`,
-      `Latency: avg ${compactMs(vector.latency?.avgMs)} · p95 ${compactMs(vector.latency?.p95Ms)}`,
+      `${L("OpenClaw QMD/向量", "OpenClaw QMD/Vector")} (${range}d)`,
+      `${L("检索", "Searches")}: ${compactInt(vector.searchCalls)} · QMD-backed ${compactPct(vector.qmdBackedRatePct)}`,
+      `${L("错误率", "Errors")}: ${compactPct(vector.searchErrorRatePct)} · ${L("平均结果数", "Avg results")} ${Number(vector.avgResultsPerSearch ?? 0).toFixed(2)}`,
+      `${L("延迟", "Latency")}: avg ${compactMs(vector.latency?.avgMs)} · p95 ${compactMs(vector.latency?.p95Ms)}`,
       `memory_get: ${compactInt(vector.memoryGetCalls)} · qmd path ${compactInt(vector.qmdMemoryGetCalls)}`,
-      `Top collections: ${topCollections || "-"}`,
-      `Top queries: ${topQueries || "-"}`,
-      `Generated: ${generatedAt}`,
+      `${L("Top collections", "Top collections")}: ${topCollections || "-"}`,
+      `${L("Top queries", "Top queries")}: ${topQueries || "-"}`,
+      `${L("生成时间", "Generated")}: ${generatedAt}`,
     ];
     return lines.join("\n");
   }
 
   if (command === "alerts") {
     const alerts = (payload?.alerts ?? []).slice(0, Math.max(maxItems, 3));
-    const lines = [`OpenClaw Alerts (${range}d)`];
+    const lines = [`${L("OpenClaw 告警", "OpenClaw Alerts")} (${range}d)`];
     if (!alerts.length) {
-      lines.push("No active alerts.");
+      lines.push(L("当前无活跃告警。", "No active alerts."));
     } else {
       for (const alert of alerts) {
         lines.push(`- [${alert.level ?? "info"}] ${alert.title}: ${alert.message}`);
       }
     }
-    lines.push(`Generated: ${generatedAt}`);
+    lines.push(`${L("生成时间", "Generated")}: ${generatedAt}`);
     return lines.join("\n");
   }
 
   if (command === "daily") {
     const dailyRows = (payload?.aggregates?.daily ?? []).slice(-Math.max(maxItems, 7));
-    const lines = [`OpenClaw Daily (${range}d)`];
+    const lines = [`${L("OpenClaw 每日", "OpenClaw Daily")} (${range}d)`];
     for (const row of dailyRows) {
       lines.push(
         `${row.date}: req ${compactInt(row.requests)} (${compactPct(row.requestErrorRatePct)}) · tok ${compactTokens(row.tokens)} · qmd ${compactInt(row.qmdBackedSearches)}/${compactInt(row.vectorSearches)}`,
       );
     }
-    lines.push(`Generated: ${generatedAt}`);
+    lines.push(`${L("生成时间", "Generated")}: ${generatedAt}`);
+    return lines.join("\n");
+  }
+
+  if (command === "weekly") {
+    const topAlerts = (payload?.alerts ?? []).slice(0, Math.max(2, maxItems));
+    const dailyRows = (payload?.aggregates?.daily ?? []).slice(-7);
+    const weeklyRequests = dailyRows.reduce((sum, row) => sum + (row.requests ?? 0), 0);
+    const weeklyTokens = dailyRows.reduce((sum, row) => sum + (row.tokens ?? 0), 0);
+    const weeklyQmdBacked = dailyRows.reduce((sum, row) => sum + (row.qmdBackedSearches ?? 0), 0);
+    const weeklyVector = dailyRows.reduce((sum, row) => sum + (row.vectorSearches ?? 0), 0);
+    const lines = [
+      `${L("OpenClaw 智能周报", "OpenClaw Weekly Brief")} (${range}d)`,
+      `${L("请求", "Requests")}: ${compactInt(weeklyRequests)} · ${L("Tokens", "Tokens")}: ${compactTokens(weeklyTokens)} · ${L("成本", "Cost")}: ${compactUsd(summary.totalCost)}`,
+      `${L("延迟", "Latency")}: avg ${compactMs(summary.avgLatencyMs)} · p95 ${compactMs(summary.p95LatencyMs)} · ${L("失败率", "Request fail")} ${compactPct(summary.requestFailureRatePct)}`,
+      `${L("QMD 覆盖率", "QMD coverage")}: ${compactPct(weeklyVector > 0 ? (weeklyQmdBacked / weeklyVector) * 100 : summary.qmdBackedRatePct)} (${compactInt(weeklyQmdBacked)}/${compactInt(weeklyVector)})`,
+      `${L("关键文件访问", "Key files touched")}: ${compactInt(summary.keyFileAccessHits ?? 0)} (AGENT/TOOLS/SOUL/Memory)`,
+    ];
+    if (topAlerts.length) {
+      lines.push(L("重点关注:", "Focus:"));
+      for (const alert of topAlerts) {
+        lines.push(`- [${alert.level ?? "info"}] ${alert.title}: ${alert.message}`);
+      }
+    } else {
+      lines.push(L("重点关注: 当前无活跃运维告警。", "Focus: no active operational alerts."));
+    }
+    lines.push(`${L("生成时间", "Generated")}: ${generatedAt}`);
     return lines.join("\n");
   }
 
   if (command === "help") {
     return [
-      "OpenClaw command views:",
+      L("OpenClaw 命令视图:", "OpenClaw command views:"),
       "- summary",
       "- quota",
       "- qmd",
       "- alerts",
       "- daily",
-      "Example: node collector.mjs --command summary --days 7",
+      "- weekly",
+      L("示例: node collector.mjs --command summary --days 7", "Example: node collector.mjs --command summary --days 7"),
     ].join("\n");
   }
 
   const lines = [
-    `OpenClaw Summary (${range}d)`,
-    `Requests: ${compactInt(summary.totalRequests)} (billable ${compactInt(summary.billableRequests)} · premium ${compactInt(summary.premiumRequests)} · fail ${compactPct(summary.requestFailureRatePct)})`,
-    `Tokens: ${compactTokens(summary.totalTokens)} · Cost ${compactUsd(summary.totalCost)}`,
-    `Latency: avg ${compactMs(summary.avgLatencyMs)} · p95 ${compactMs(summary.p95LatencyMs)}`,
+    `${L("OpenClaw 摘要", "OpenClaw Summary")} (${range}d)`,
+    `${L("请求", "Requests")}: ${compactInt(summary.totalRequests)} (${L("计费", "billable")} ${compactInt(summary.billableRequests)} · ${L("高级", "premium")} ${compactInt(summary.premiumRequests)} · ${L("失败", "fail")} ${compactPct(summary.requestFailureRatePct)})`,
+    `${L("Tokens", "Tokens")}: ${compactTokens(summary.totalTokens)} · ${L("成本", "Cost")} ${compactUsd(summary.totalCost)}`,
+    `${L("延迟", "Latency")}: avg ${compactMs(summary.avgLatencyMs)} · p95 ${compactMs(summary.p95LatencyMs)}`,
     `Vector/QMD: ${compactInt(summary.vectorSearches)} searches · qmd ${compactPct(summary.qmdBackedRatePct)} · err ${compactPct(summary.vectorSearchErrorRatePct)}`,
-    `Quota: total ${quota.totalLimit ?? "unlimited"} (used ${compactInt(quota.totalUsed)}) · premium ${quota.premiumLimit ?? "unlimited"} (used ${compactInt(quota.premiumUsed)})`,
-    `Generated: ${generatedAt}`,
+    `${L("配额", "Quota")}: ${L("总量", "total")} ${quota.totalLimit ?? L("不限", "unlimited")} (${L("已用", "used")} ${compactInt(quota.totalUsed)}) · ${L("高级", "premium")} ${quota.premiumLimit ?? L("不限", "unlimited")} (${L("已用", "used")} ${compactInt(quota.premiumUsed)})`,
+    `${L("生成时间", "Generated")}: ${generatedAt}`,
   ];
   return lines.join("\n");
 }
@@ -2633,7 +2809,7 @@ async function runCli() {
   const args = parseArgs(process.argv.slice(2));
 
   if (args.help) {
-    console.log(`OpenClaw Observatory Collector\n\nUsage:\n  node collector.mjs [--state-dir <path>] [--workspace-dir <path>] [--days <n|all>] [--agent <id>] [--channel <name>] [--session-limit <n>] [--memory-limit <n>] [--timeline-limit <n>] [--request-quota <n>] [--premium-quota <n>] [--premium-model-pattern <regex>] [--command <summary|quota|qmd|alerts|daily|help>] [--max-items <n>] [--out <file>] [--pretty]\n`);
+    console.log(`OpenClaw Observatory Collector\n\nUsage:\n  node collector.mjs [--state-dir <path>] [--workspace-dir <path>] [--days <n|all>] [--agent <id>] [--channel <name>] [--session-limit <n>] [--memory-limit <n>] [--timeline-limit <n>] [--request-quota <n>] [--premium-quota <n>] [--premium-model-pattern <regex>] [--command <summary|quota|qmd|alerts|daily|weekly|help>] [--lang <zh|en>] [--max-items <n>] [--out <file>] [--pretty]\n`);
     process.exit(0);
   }
 
@@ -2660,6 +2836,7 @@ async function runCli() {
     const text = buildCommandText(payload, {
       command,
       maxItems: asNumber(args["max-items"], 6),
+      lang: typeof args.lang === "string" ? args.lang : undefined,
     });
     const outFile = typeof args.out === "string" ? args.out : null;
     if (outFile) {

@@ -4,6 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>OpenClaw Observatory</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Noto+Sans+SC:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
@@ -12,13 +18,15 @@
     <main class="layout">
       <header class="hero">
         <div>
-          <p class="eyebrow">OpenClaw Metrics Console</p>
-          <h1>Observatory Dashboard</h1>
-          <p class="sub">Tokens, latency, tools, model mix, and memory footprint in one place.</p>
+          <p class="eyebrow" data-i18n="hero.eyebrow">OpenClaw Metrics Console</p>
+          <h1 data-i18n="hero.title">Observatory Dashboard</h1>
+          <p class="sub" data-i18n="hero.sub">
+            Tokens, latency, tools, model mix, and memory footprint in one place.
+          </p>
         </div>
         <div class="controls">
           <label>
-            Window
+            <span data-i18n="label.window">Window</span>
             <select id="daysSelect">
               <option value="1">24h</option>
               <option value="7">7d</option>
@@ -28,42 +36,71 @@
             </select>
           </label>
           <label>
-            Agent
+            <span data-i18n="label.agent">Agent</span>
             <select id="agentSelect">
               <option value="">All agents</option>
             </select>
           </label>
           <label>
-            Channel
+            <span data-i18n="label.channel">Channel</span>
             <select id="channelSelect">
               <option value="">All channels</option>
             </select>
           </label>
           <label>
-            Request Quota
-            <input id="requestQuotaInput" type="number" min="1" step="1" placeholder="Unlimited" />
+            <span data-i18n="label.language">Language</span>
+            <select id="langSelect">
+              <option value="en">English</option>
+              <option value="zh">中文</option>
+            </select>
           </label>
           <label>
-            Premium Quota
-            <input id="premiumQuotaInput" type="number" min="1" step="1" placeholder="Unlimited" />
+            <span data-i18n="label.requestQuota">Request Quota</span>
+            <input
+              id="requestQuotaInput"
+              type="number"
+              min="1"
+              step="1"
+              placeholder="Unlimited"
+              data-i18n-placeholder="placeholder.unlimited"
+            />
           </label>
-          <button id="refreshBtn" type="button">Refresh</button>
+          <label>
+            <span data-i18n="label.premiumQuota">Premium Quota</span>
+            <input
+              id="premiumQuotaInput"
+              type="number"
+              min="1"
+              step="1"
+              placeholder="Unlimited"
+              data-i18n-placeholder="placeholder.unlimited"
+            />
+          </label>
+          <button id="refreshBtn" type="button" data-i18n="action.refresh">Refresh</button>
         </div>
       </header>
 
       <section class="cards" id="kpiCards"></section>
 
+      <section class="panel">
+        <div class="panel-head">
+          <h2 data-i18n="weekly.title">Intelligent Weekly Brief</h2>
+          <span id="weeklyMeta" class="meta"></span>
+        </div>
+        <div id="weeklyBrief" class="brief"></div>
+      </section>
+
       <section class="panel two-col">
         <article>
           <div class="panel-head">
-            <h2>Daily Token + Cost Trend</h2>
+            <h2 data-i18n="chart.tokenCost">Daily Token + Cost Trend</h2>
             <span id="trendMeta" class="meta"></span>
           </div>
           <div id="trendChart" class="chart"></div>
         </article>
         <article>
           <div class="panel-head">
-            <h2>Response Latency</h2>
+            <h2 data-i18n="chart.latency">Response Latency</h2>
             <span id="latencyMeta" class="meta"></span>
           </div>
           <div id="latencyChart" class="chart"></div>
@@ -73,14 +110,14 @@
       <section class="panel two-col">
         <article>
           <div class="panel-head">
-            <h2>Request Volume</h2>
+            <h2 data-i18n="chart.requestVolume">Request Volume</h2>
             <span id="requestTrendMeta" class="meta"></span>
           </div>
           <div id="requestTrendChart" class="chart"></div>
         </article>
         <article>
           <div class="panel-head">
-            <h2>Request Reliability</h2>
+            <h2 data-i18n="chart.requestReliability">Request Reliability</h2>
             <span id="requestHealthMeta" class="meta"></span>
           </div>
           <div id="requestHealthChart" class="chart"></div>
@@ -90,14 +127,14 @@
       <section class="panel two-col">
         <article>
           <div class="panel-head">
-            <h2>Quota and Budget</h2>
+            <h2 data-i18n="chart.quota">Quota and Budget</h2>
             <span id="quotaMeta" class="meta"></span>
           </div>
           <div id="quotaCards" class="memory-grid"></div>
         </article>
         <article>
           <div class="panel-head">
-            <h2>QMD and Vector Retrieval</h2>
+            <h2 data-i18n="chart.qmd">QMD and Vector Retrieval</h2>
             <span id="vectorMeta" class="meta"></span>
           </div>
           <div id="vectorStats" class="memory-grid"></div>
@@ -108,13 +145,13 @@
       <section class="panel two-col">
         <article>
           <div class="panel-head">
-            <h2>Top Models</h2>
+            <h2 data-i18n="chart.topModels">Top Models</h2>
           </div>
           <div id="modelsList" class="bars"></div>
         </article>
         <article>
           <div class="panel-head">
-            <h2>Top Tools</h2>
+            <h2 data-i18n="chart.topTools">Top Tools</h2>
           </div>
           <div id="toolsList" class="bars"></div>
         </article>
@@ -123,13 +160,13 @@
       <section class="panel two-col">
         <article>
           <div class="panel-head">
-            <h2>Request by Model</h2>
+            <h2 data-i18n="chart.requestByModel">Request by Model</h2>
           </div>
           <div id="requestModelsList" class="bars"></div>
         </article>
         <article>
           <div class="panel-head">
-            <h2>Request by Channel</h2>
+            <h2 data-i18n="chart.requestByChannel">Request by Channel</h2>
           </div>
           <div id="requestChannelsList" class="bars"></div>
         </article>
@@ -138,19 +175,35 @@
       <section class="panel two-col">
         <article>
           <div class="panel-head">
-            <h2>Sessions</h2>
+            <h2 data-i18n="chart.keyFileTrend">Key File Daily Access</h2>
+            <span id="keyFileMeta" class="meta"></span>
+          </div>
+          <div id="keyFileChart" class="chart"></div>
+        </article>
+        <article>
+          <div class="panel-head">
+            <h2 data-i18n="chart.keyFileRank">Key File Access Ranking</h2>
+          </div>
+          <div id="keyFileStats" class="bars"></div>
+        </article>
+      </section>
+
+      <section class="panel two-col">
+        <article>
+          <div class="panel-head">
+            <h2 data-i18n="session.title">Sessions</h2>
             <span id="sessionCount" class="meta"></span>
           </div>
           <div class="table-wrap">
             <table id="sessionsTable">
               <thead>
                 <tr>
-                  <th>Session</th>
-                  <th>Agent</th>
-                  <th>Tokens</th>
-                  <th>Cost</th>
-                  <th>Latency</th>
-                  <th>Updated</th>
+                  <th data-i18n="table.session">Session</th>
+                  <th data-i18n="table.agent">Agent</th>
+                  <th data-i18n="table.tokens">Tokens</th>
+                  <th data-i18n="table.cost">Cost</th>
+                  <th data-i18n="table.latency">Latency</th>
+                  <th data-i18n="table.updated">Updated</th>
                 </tr>
               </thead>
               <tbody></tbody>
@@ -159,17 +212,19 @@
         </article>
         <article>
           <div class="panel-head">
-            <h2>Session Inspector</h2>
-            <span class="meta">Click a row</span>
+            <h2 data-i18n="session.inspector">Session Inspector</h2>
+            <span class="meta" data-i18n="session.clickRow">Click a row</span>
           </div>
-          <div id="sessionInspector" class="inspector empty">No session selected.</div>
+          <div id="sessionInspector" class="inspector empty" data-i18n="session.none">
+            No session selected.
+          </div>
         </article>
       </section>
 
       <section class="panel">
         <div class="panel-head">
-          <h2>Bot Command Preview</h2>
-          <span class="meta">Telegram / Discord short command response</span>
+          <h2 data-i18n="command.title">Bot Command Preview</h2>
+          <span class="meta" data-i18n="command.meta">Telegram / Discord short command response</span>
         </div>
         <div class="command-toolbar">
           <button class="cmd-btn" data-cmd="summary" type="button">summary</button>
@@ -177,14 +232,15 @@
           <button class="cmd-btn" data-cmd="qmd" type="button">qmd</button>
           <button class="cmd-btn" data-cmd="alerts" type="button">alerts</button>
           <button class="cmd-btn" data-cmd="daily" type="button">daily</button>
+          <button class="cmd-btn" data-cmd="weekly" type="button">weekly</button>
         </div>
-        <pre id="commandPreview" class="command-preview">Loading command preview…</pre>
+        <pre id="commandPreview" class="command-preview" data-i18n="command.loading">Loading command preview…</pre>
       </section>
 
       <section class="panel two-col">
         <article>
           <div class="panel-head">
-            <h2>Memory Footprint</h2>
+            <h2 data-i18n="memory.footprint">Memory Footprint</h2>
             <span id="memoryMeta" class="meta"></span>
           </div>
           <div id="memoryStats" class="memory-grid"></div>
@@ -192,7 +248,7 @@
         </article>
         <article>
           <div class="panel-head">
-            <h2>Latest Memory Files</h2>
+            <h2 data-i18n="memory.latestFiles">Latest Memory Files</h2>
           </div>
           <div id="memoryFiles" class="memory-files"></div>
         </article>
@@ -201,14 +257,14 @@
       <section class="panel two-col">
         <article>
           <div class="panel-head">
-            <h2>Anomaly Radar</h2>
-            <span class="meta">Token spike · latency jitter</span>
+            <h2 data-i18n="anomaly.title">Anomaly Radar</h2>
+            <span class="meta" data-i18n="anomaly.meta">Token spike · latency jitter</span>
           </div>
           <div id="anomalyList" class="alerts"></div>
         </article>
         <article>
           <div class="panel-head">
-            <h2>Model Switching Sessions</h2>
+            <h2 data-i18n="anomaly.modelSwitch">Model Switching Sessions</h2>
             <span id="modelSwitchMeta" class="meta"></span>
           </div>
           <div id="modelSwitchList" class="memory-files"></div>
@@ -217,7 +273,7 @@
 
       <section class="panel">
         <div class="panel-head">
-          <h2>Operational Alerts</h2>
+          <h2 data-i18n="alert.title">Operational Alerts</h2>
           <span id="generatedAt" class="meta"></span>
         </div>
         <div id="alerts" class="alerts"></div>

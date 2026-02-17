@@ -2,16 +2,22 @@ const els = {
   days: document.getElementById("daysSelect"),
   agent: document.getElementById("agentSelect"),
   channel: document.getElementById("channelSelect"),
+  lang: document.getElementById("langSelect"),
   requestQuota: document.getElementById("requestQuotaInput"),
   premiumQuota: document.getElementById("premiumQuotaInput"),
   refresh: document.getElementById("refreshBtn"),
   cards: document.getElementById("kpiCards"),
+  weeklyMeta: document.getElementById("weeklyMeta"),
+  weeklyBrief: document.getElementById("weeklyBrief"),
   trend: document.getElementById("trendChart"),
   trendMeta: document.getElementById("trendMeta"),
   requestTrend: document.getElementById("requestTrendChart"),
   requestTrendMeta: document.getElementById("requestTrendMeta"),
   requestHealth: document.getElementById("requestHealthChart"),
   requestHealthMeta: document.getElementById("requestHealthMeta"),
+  keyFileMeta: document.getElementById("keyFileMeta"),
+  keyFileChart: document.getElementById("keyFileChart"),
+  keyFileStats: document.getElementById("keyFileStats"),
   quotaMeta: document.getElementById("quotaMeta"),
   quotaCards: document.getElementById("quotaCards"),
   vectorMeta: document.getElementById("vectorMeta"),
@@ -44,13 +50,135 @@ const state = {
   selectedSessionId: null,
   inFlight: false,
   commandMode: "summary",
+  lang: "zh",
 };
+
+const I18N = {
+  en: {
+    "hero.eyebrow": "OpenClaw Metrics Console",
+    "hero.title": "Observatory Dashboard",
+    "hero.sub": "Tokens, latency, tools, model mix, and memory footprint in one place.",
+    "label.window": "Window",
+    "label.agent": "Agent",
+    "label.channel": "Channel",
+    "label.language": "Language",
+    "label.requestQuota": "Request Quota",
+    "label.premiumQuota": "Premium Quota",
+    "action.refresh": "Refresh",
+    "action.loading": "Loading…",
+    "placeholder.unlimited": "Unlimited",
+    "weekly.title": "Intelligent Weekly Brief",
+    "chart.tokenCost": "Daily Token + Cost Trend",
+    "chart.latency": "Response Latency",
+    "chart.requestVolume": "Request Volume",
+    "chart.requestReliability": "Request Reliability",
+    "chart.quota": "Quota and Budget",
+    "chart.qmd": "QMD and Vector Retrieval",
+    "chart.topModels": "Top Models",
+    "chart.topTools": "Top Tools",
+    "chart.requestByModel": "Request by Model",
+    "chart.requestByChannel": "Request by Channel",
+    "chart.keyFileTrend": "Key File Daily Access",
+    "chart.keyFileRank": "Key File Access Ranking",
+    "session.title": "Sessions",
+    "table.session": "Session",
+    "table.agent": "Agent",
+    "table.tokens": "Tokens",
+    "table.cost": "Cost",
+    "table.latency": "Latency",
+    "table.updated": "Updated",
+    "session.inspector": "Session Inspector",
+    "session.clickRow": "Click a row",
+    "session.none": "No session selected.",
+    "command.title": "Bot Command Preview",
+    "command.meta": "Telegram / Discord short command response",
+    "command.loading": "Loading command preview…",
+    "memory.footprint": "Memory Footprint",
+    "memory.latestFiles": "Latest Memory Files",
+    "anomaly.title": "Anomaly Radar",
+    "anomaly.meta": "Token spike · latency jitter",
+    "anomaly.modelSwitch": "Model Switching Sessions",
+    "alert.title": "Operational Alerts",
+    "status.generated": "Generated",
+  },
+  zh: {
+    "hero.eyebrow": "OpenClaw 指标控制台",
+    "hero.title": "可观测性仪表盘",
+    "hero.sub": "在一个界面同时查看 Tokens、延迟、工具调用、模型分布与记忆特征。",
+    "label.window": "时间窗口",
+    "label.agent": "Agent",
+    "label.channel": "渠道",
+    "label.language": "语言",
+    "label.requestQuota": "请求额度",
+    "label.premiumQuota": "高级额度",
+    "action.refresh": "刷新",
+    "action.loading": "加载中…",
+    "placeholder.unlimited": "不限",
+    "weekly.title": "智能周报卡片",
+    "chart.tokenCost": "每日 Tokens 与成本趋势",
+    "chart.latency": "响应延迟趋势",
+    "chart.requestVolume": "请求量趋势",
+    "chart.requestReliability": "请求可靠性",
+    "chart.quota": "配额与预算",
+    "chart.qmd": "QMD 与向量检索",
+    "chart.topModels": "模型 Top 排行",
+    "chart.topTools": "工具 Top 排行",
+    "chart.requestByModel": "按模型请求分布",
+    "chart.requestByChannel": "按渠道请求分布",
+    "chart.keyFileTrend": "关键文件每日访问",
+    "chart.keyFileRank": "关键文件访问排行",
+    "session.title": "会话列表",
+    "table.session": "会话",
+    "table.agent": "Agent",
+    "table.tokens": "Tokens",
+    "table.cost": "成本",
+    "table.latency": "延迟",
+    "table.updated": "更新时间",
+    "session.inspector": "会话分析面板",
+    "session.clickRow": "点击左侧行查看",
+    "session.none": "未选择会话。",
+    "command.title": "机器人命令预览",
+    "command.meta": "Telegram / Discord 可直接转发的短命令输出",
+    "command.loading": "正在加载命令预览…",
+    "memory.footprint": "记忆数据体量",
+    "memory.latestFiles": "最新记忆文件",
+    "anomaly.title": "异常雷达",
+    "anomaly.meta": "Token 尖峰 · 延迟抖动",
+    "anomaly.modelSwitch": "模型频繁切换会话",
+    "alert.title": "运行告警",
+    "status.generated": "生成时间",
+  },
+};
+
+function t(key, fallback = "") {
+  return I18N[state.lang]?.[key] ?? fallback;
+}
+
+function applyI18n() {
+  document.documentElement.lang = state.lang === "zh" ? "zh-CN" : "en";
+  document.querySelectorAll("[data-i18n]").forEach((node) => {
+    const key = node.getAttribute("data-i18n");
+    if (!key) {
+      return;
+    }
+    const translated = t(key, node.textContent || "");
+    node.textContent = translated;
+  });
+  document.querySelectorAll("[data-i18n-placeholder]").forEach((node) => {
+    const key = node.getAttribute("data-i18n-placeholder");
+    if (!key) {
+      return;
+    }
+    const translated = t(key, node.getAttribute("placeholder") || "");
+    node.setAttribute("placeholder", translated);
+  });
+}
 
 function fmtInt(value) {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return "-";
   }
-  return value.toLocaleString("en-US");
+  return value.toLocaleString(state.lang === "zh" ? "zh-CN" : "en-US");
 }
 
 function fmtTokens(value) {
@@ -108,7 +236,7 @@ function fmtDate(value) {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return "-";
   }
-  return new Date(value).toLocaleString();
+  return new Date(value).toLocaleString(state.lang === "zh" ? "zh-CN" : "en-US");
 }
 
 function positiveIntFromInput(value) {
@@ -131,7 +259,7 @@ function esc(value) {
 function setLoading(on) {
   state.inFlight = on;
   els.refresh.disabled = on;
-  els.refresh.textContent = on ? "Loading…" : "Refresh";
+  els.refresh.textContent = on ? t("action.loading", "Loading…") : t("action.refresh", "Refresh");
 }
 
 function selectOptions(select, values, labelPrefix) {
@@ -151,59 +279,104 @@ function selectOptions(select, values, labelPrefix) {
 function renderCards(data) {
   const totalQuota = data.quota?.totalLimit ?? null;
   const premiumQuota = data.quota?.premiumLimit ?? null;
+  const unlimitedLabel = state.lang === "zh" ? "不限" : "Unlimited";
   const cards = [
     {
-      label: "Sessions In Scope",
+      label: state.lang === "zh" ? "范围内会话" : "Sessions In Scope",
       value: fmtInt(data.summary.sessionsInScope),
-      hint: `${fmtInt(data.summary.sessionsScanned)} scanned`,
+      hint:
+        state.lang === "zh"
+          ? `${fmtInt(data.summary.sessionsScanned)} 个已扫描`
+          : `${fmtInt(data.summary.sessionsScanned)} scanned`,
     },
     {
-      label: "Total Tokens",
+      label: state.lang === "zh" ? "总 Tokens" : "Total Tokens",
       value: fmtTokens(data.summary.totalTokens),
-      hint: `input ${fmtTokens(data.totals.input)} · output ${fmtTokens(data.totals.output)}`,
+      hint:
+        state.lang === "zh"
+          ? `输入 ${fmtTokens(data.totals.input)} · 输出 ${fmtTokens(data.totals.output)}`
+          : `input ${fmtTokens(data.totals.input)} · output ${fmtTokens(data.totals.output)}`,
     },
-    { label: "Total Cost", value: fmtUsd(data.summary.totalCost), hint: "estimated from transcript" },
     {
-      label: "Cache Read Share",
+      label: state.lang === "zh" ? "关键文件访问" : "Key File Access",
+      value: fmtInt(data.summary.keyFileAccessHits),
+      hint:
+        state.lang === "zh"
+          ? "AGENT.md / TOOLS.md / SOUL.md / Memory"
+          : "AGENT.md / TOOLS.md / SOUL.md / Memory",
+    },
+    {
+      label: state.lang === "zh" ? "总成本" : "Total Cost",
+      value: fmtUsd(data.summary.totalCost),
+      hint: state.lang === "zh" ? "由会话估算" : "estimated from transcript",
+    },
+    {
+      label: state.lang === "zh" ? "缓存命中占比" : "Cache Read Share",
       value: fmtPct(data.summary.cacheReadSharePct),
-      hint: `${fmtTokens(data.totals.cacheRead)} cache tokens`,
+      hint:
+        state.lang === "zh"
+          ? `${fmtTokens(data.totals.cacheRead)} 缓存 tokens`
+          : `${fmtTokens(data.totals.cacheRead)} cache tokens`,
     },
     {
-      label: "Requests",
+      label: state.lang === "zh" ? "请求数" : "Requests",
       value: fmtInt(data.summary.totalRequests),
-      hint: `${fmtInt(data.summary.billableRequests)} billable · ${fmtInt(data.summary.premiumRequests)} premium`,
+      hint:
+        state.lang === "zh"
+          ? `${fmtInt(data.summary.billableRequests)} 计费 · ${fmtInt(data.summary.premiumRequests)} 高级`
+          : `${fmtInt(data.summary.billableRequests)} billable · ${fmtInt(data.summary.premiumRequests)} premium`,
     },
     {
-      label: "Request Failure",
+      label: state.lang === "zh" ? "请求失败率" : "Request Failure",
       value: fmtPct(data.summary.requestFailureRatePct),
-      hint: `${fmtInt(data.requests.failed)} failed · ${fmtInt(data.requests.timeout)} timeout`,
+      hint:
+        state.lang === "zh"
+          ? `${fmtInt(data.requests.failed)} 失败 · ${fmtInt(data.requests.timeout)} 超时`
+          : `${fmtInt(data.requests.failed)} failed · ${fmtInt(data.requests.timeout)} timeout`,
     },
     {
-      label: "Avg Latency",
+      label: state.lang === "zh" ? "平均延迟" : "Avg Latency",
       value: fmtMs(data.summary.avgLatencyMs),
-      hint: "assistant response latency",
+      hint: state.lang === "zh" ? "助手响应延迟" : "assistant response latency",
     },
     {
-      label: "P95 Latency",
+      label: state.lang === "zh" ? "P95 延迟" : "P95 Latency",
       value: fmtMs(data.summary.p95LatencyMs),
-      hint: "tail response time",
+      hint: state.lang === "zh" ? "长尾响应时间" : "tail response time",
     },
     {
-      label: "QMD-backed Search",
+      label: state.lang === "zh" ? "QMD 回源占比" : "QMD-backed Search",
       value: fmtPct(data.summary.qmdBackedRatePct),
-      hint: `${fmtInt(data.summary.vectorSearches)} vector searches`,
+      hint:
+        state.lang === "zh"
+          ? `${fmtInt(data.summary.vectorSearches)} 次向量检索`
+          : `${fmtInt(data.summary.vectorSearches)} vector searches`,
     },
     {
-      label: "Request Quota",
-      value: totalQuota ? `${fmtInt(data.quota.totalUsed)} / ${fmtInt(totalQuota)}` : "Unlimited",
-      hint: totalQuota ? `${fmtPct(data.quota.totalUsagePct)} used` : "not configured",
+      label: state.lang === "zh" ? "请求额度" : "Request Quota",
+      value: totalQuota ? `${fmtInt(data.quota.totalUsed)} / ${fmtInt(totalQuota)}` : unlimitedLabel,
+      hint:
+        totalQuota && state.lang === "zh"
+          ? `${fmtPct(data.quota.totalUsagePct)} 已用`
+          : totalQuota
+            ? `${fmtPct(data.quota.totalUsagePct)} used`
+            : state.lang === "zh"
+              ? "未配置"
+              : "not configured",
     },
     {
-      label: "Premium Quota",
+      label: state.lang === "zh" ? "高级额度" : "Premium Quota",
       value: premiumQuota
         ? `${fmtInt(data.quota.premiumUsed)} / ${fmtInt(premiumQuota)}`
-        : "Unlimited",
-      hint: premiumQuota ? `${fmtPct(data.quota.premiumUsagePct)} used` : "not configured",
+        : unlimitedLabel,
+      hint:
+        premiumQuota && state.lang === "zh"
+          ? `${fmtPct(data.quota.premiumUsagePct)} 已用`
+          : premiumQuota
+            ? `${fmtPct(data.quota.premiumUsagePct)} used`
+            : state.lang === "zh"
+              ? "未配置"
+              : "not configured",
     },
   ];
 
@@ -232,13 +405,13 @@ function linePath(points, width, height, pad) {
     .join(" ");
 }
 
-function renderDualLineChart({ mount, seriesA, seriesB, colorA, colorB }) {
+function renderDualLineChart({ mount, seriesA, seriesB, colorA, colorB, labels = [] }) {
   const width = Math.max(mount.clientWidth - 16, 320);
-  const height = 220;
-  const pad = 18;
+  const height = 240;
+  const pad = 24;
 
   if (!seriesA.length) {
-    mount.innerHTML = `<div class="muted">No data in selected range.</div>`;
+    mount.innerHTML = `<div class="muted">${state.lang === "zh" ? "选定时间范围暂无数据。" : "No data in selected range."}</div>`;
     return;
   }
 
@@ -247,6 +420,20 @@ function renderDualLineChart({ mount, seriesA, seriesB, colorA, colorB }) {
 
   const pathA = linePath(pointsA, width, height, pad);
   const pathB = linePath(pointsB, width, height, pad);
+  const ticks = [0, Math.floor((seriesA.length - 1) / 2), Math.max(0, seriesA.length - 1)];
+  const uniqueTicks = Array.from(new Set(ticks)).filter((v) => v >= 0 && v < seriesA.length);
+  const innerW = width - pad * 2;
+  const tickLines = uniqueTicks
+    .map((idx) => {
+      const x = pad + (seriesA.length > 1 ? (idx / (seriesA.length - 1)) * innerW : innerW / 2);
+      const dateLabel = labels[idx] ?? "";
+      return `
+        <line x1="${x.toFixed(2)}" y1="${pad}" x2="${x.toFixed(2)}" y2="${height - pad}" stroke="rgba(148,136,121,0.2)" stroke-width="1" />
+        <text x="${x.toFixed(2)}" y="${height - 6}" text-anchor="middle" fill="var(--muted)" font-size="10">${esc(dateLabel)}</text>
+      `;
+    })
+    .join("");
+  const maxY = Math.max(...seriesA, ...seriesB, 1);
 
   mount.innerHTML = `
     <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">
@@ -257,93 +444,134 @@ function renderDualLineChart({ mount, seriesA, seriesB, colorA, colorB }) {
         </linearGradient>
         <linearGradient id="gb" x1="0" x2="1" y1="0" y2="0">
           <stop offset="0%" stop-color="${colorB}"/>
-          <stop offset="100%" stop-color="#ffe2ab"/>
+          <stop offset="100%" stop-color="#d2bea4"/>
         </linearGradient>
       </defs>
+      <line x1="${pad}" y1="${height - pad}" x2="${width - pad}" y2="${height - pad}" stroke="rgba(148,136,121,0.35)" stroke-width="1" />
+      <line x1="${pad}" y1="${pad}" x2="${width - pad}" y2="${pad}" stroke="rgba(148,136,121,0.2)" stroke-width="1" stroke-dasharray="3 3" />
+      ${tickLines}
       <path d="${pathA}" fill="none" stroke="url(#ga)" stroke-width="2.3" />
       <path d="${pathB}" fill="none" stroke="url(#gb)" stroke-width="2.3" stroke-dasharray="5 4" />
+      <text x="${pad}" y="${pad - 6}" fill="var(--muted)" font-size="10">max ${esc(fmtInt(maxY))}</text>
     </svg>
   `;
 }
 
 function renderTrend(data) {
   const daily = data.aggregates.daily || [];
-  els.trendMeta.textContent = `${daily.length} days`;
+  if (daily.length > 0) {
+    const first = daily[0].date;
+    const last = daily[daily.length - 1].date;
+    els.trendMeta.textContent =
+      state.lang === "zh" ? `${daily.length} 天 · ${first} → ${last}` : `${daily.length} days · ${first} → ${last}`;
+  } else {
+    els.trendMeta.textContent = state.lang === "zh" ? "无数据" : "No data";
+  }
   renderDualLineChart({
     mount: els.trend,
     seriesA: daily.map((d) => d.tokens),
     seriesB: daily.map((d) => d.cost),
-    colorA: "#5ad0ff",
-    colorB: "#ffb86a",
+    labels: daily.map((d) => d.date.slice(5)),
+    colorA: "#8ba193",
+    colorB: "#bda58b",
   });
 }
 
 function renderLatency(data) {
   const daily = data.aggregates.daily || [];
-  els.latencyMeta.textContent = `${daily.filter((d) => d.latency).length} days with latency`;
+  els.latencyMeta.textContent =
+    state.lang === "zh"
+      ? `${daily.filter((d) => d.latency).length} 天有延迟样本`
+      : `${daily.filter((d) => d.latency).length} days with latency`;
   renderDualLineChart({
     mount: els.latency,
     seriesA: daily.map((d) => d.latency?.avgMs ?? 0),
     seriesB: daily.map((d) => d.latency?.p95Ms ?? 0),
-    colorA: "#6adf93",
-    colorB: "#ffd076",
+    labels: daily.map((d) => d.date.slice(5)),
+    colorA: "#849a89",
+    colorB: "#c6ac7f",
   });
 }
 
 function renderRequestTrend(data) {
   const daily = data.aggregates.daily || [];
   const withReq = daily.filter((d) => (d.requests ?? 0) > 0).length;
-  els.requestTrendMeta.textContent = `${withReq} days with requests`;
+  els.requestTrendMeta.textContent =
+    state.lang === "zh" ? `${withReq} 天有请求` : `${withReq} days with requests`;
   renderDualLineChart({
     mount: els.requestTrend,
     seriesA: daily.map((d) => d.requests ?? 0),
     seriesB: daily.map((d) => d.premiumRequests ?? 0),
-    colorA: "#6ec8ff",
-    colorB: "#ffcf6e",
+    labels: daily.map((d) => d.date.slice(5)),
+    colorA: "#879d8f",
+    colorB: "#bca27f",
   });
 }
 
 function renderRequestHealth(data) {
   const daily = data.aggregates.daily || [];
-  els.requestHealthMeta.textContent = `${daily.length} days`;
+  els.requestHealthMeta.textContent = state.lang === "zh" ? `${daily.length} 天` : `${daily.length} days`;
   renderDualLineChart({
     mount: els.requestHealth,
     seriesA: daily.map((d) => d.requestErrors ?? 0),
     seriesB: daily.map((d) => d.requestTimeouts ?? 0),
-    colorA: "#ff8d9a",
-    colorB: "#ffd47a",
+    labels: daily.map((d) => d.date.slice(5)),
+    colorA: "#b4877d",
+    colorB: "#c3ab85",
   });
 }
 
 function renderQuota(data) {
   const quota = data.quota || {};
+  const unlimitedLabel = state.lang === "zh" ? "不限" : "Unlimited";
   const rows = [
     {
-      label: "Total Requests",
-      value: quota.totalLimit ? `${fmtInt(quota.totalUsed)} / ${fmtInt(quota.totalLimit)}` : "Unlimited",
-      sub: quota.totalLimit ? `${fmtPct(quota.totalUsagePct)} used` : "No cap configured",
+      label: state.lang === "zh" ? "总请求额度" : "Total Requests",
+      value: quota.totalLimit ? `${fmtInt(quota.totalUsed)} / ${fmtInt(quota.totalLimit)}` : unlimitedLabel,
+      sub: quota.totalLimit
+        ? state.lang === "zh"
+          ? `${fmtPct(quota.totalUsagePct)} 已用`
+          : `${fmtPct(quota.totalUsagePct)} used`
+        : state.lang === "zh"
+          ? "未配置上限"
+          : "No cap configured",
     },
     {
-      label: "Premium Requests",
+      label: state.lang === "zh" ? "高级请求额度" : "Premium Requests",
       value: quota.premiumLimit
         ? `${fmtInt(quota.premiumUsed)} / ${fmtInt(quota.premiumLimit)}`
-        : "Unlimited",
-      sub: quota.premiumLimit ? `${fmtPct(quota.premiumUsagePct)} used` : "No cap configured",
+        : unlimitedLabel,
+      sub: quota.premiumLimit
+        ? state.lang === "zh"
+          ? `${fmtPct(quota.premiumUsagePct)} 已用`
+          : `${fmtPct(quota.premiumUsagePct)} used`
+        : state.lang === "zh"
+          ? "未配置上限"
+          : "No cap configured",
     },
     {
-      label: "Remaining",
-      value: `${quota.totalRemaining ?? "∞"} total`,
-      sub: `${quota.premiumRemaining ?? "∞"} premium`,
+      label: state.lang === "zh" ? "剩余额度" : "Remaining",
+      value: state.lang === "zh" ? `${quota.totalRemaining ?? "∞"} 总量` : `${quota.totalRemaining ?? "∞"} total`,
+      sub: state.lang === "zh" ? `${quota.premiumRemaining ?? "∞"} 高级` : `${quota.premiumRemaining ?? "∞"} premium`,
     },
     {
-      label: "Billable Ratio",
+      label: state.lang === "zh" ? "计费比例" : "Billable Ratio",
       value: fmtPct(data.requests.billableRatePct),
-      sub: `${fmtInt(data.requests.billable)} of ${fmtInt(data.requests.total)}`,
+      sub:
+        state.lang === "zh"
+          ? `${fmtInt(data.requests.billable)} / ${fmtInt(data.requests.total)}`
+          : `${fmtInt(data.requests.billable)} of ${fmtInt(data.requests.total)}`,
     },
   ];
 
   els.quotaMeta.textContent =
-    quota.totalLimit || quota.premiumLimit ? "tracked with configured caps" : "caps not configured";
+    quota.totalLimit || quota.premiumLimit
+      ? state.lang === "zh"
+        ? "按配置上限追踪"
+        : "tracked with configured caps"
+      : state.lang === "zh"
+        ? "未配置上限"
+        : "caps not configured";
   els.quotaCards.innerHTML = rows
     .map(
       (row) =>
@@ -453,6 +681,110 @@ function renderRequestBreakdowns(data) {
   });
 }
 
+function renderKeyFiles(data) {
+  const keyFiles = data.keyFiles || { totals: [], daily: [] };
+  const dailyRows = Array.isArray(keyFiles.daily) ? keyFiles.daily : [];
+  const totalHits = Number.isFinite(keyFiles.totalHits) ? keyFiles.totalHits : 0;
+  if (dailyRows.length > 0) {
+    els.keyFileMeta.textContent =
+      state.lang === "zh"
+        ? `${dailyRows.length} 天 · 累计 ${fmtInt(totalHits)} 次访问`
+        : `${dailyRows.length} days · ${fmtInt(totalHits)} total hits`;
+  } else {
+    els.keyFileMeta.textContent = state.lang === "zh" ? "无关键文件访问记录" : "No key-file access records";
+  }
+
+  renderDualLineChart({
+    mount: els.keyFileChart,
+    seriesA: dailyRows.map((row) => row.total ?? 0),
+    seriesB: dailyRows.map((row) => {
+      const counts = row.counts || {};
+      return (counts.agentMd ?? 0) + (counts.toolsMd ?? 0) + (counts.soulMd ?? 0);
+    }),
+    labels: dailyRows.map((row) => String(row.date).slice(5)),
+    colorA: "#8b9f92",
+    colorB: "#b58f7f",
+  });
+
+  renderBars({
+    mount: els.keyFileStats,
+    rows: [...(keyFiles.totals || [])].sort((a, b) => (b.count ?? 0) - (a.count ?? 0)),
+    valueGetter: (row) => row.count ?? 0,
+    labelGetter: (row) => row.label ?? row.key ?? "unknown",
+    valueFormatter: (value) => `${fmtInt(value)} ${state.lang === "zh" ? "次" : "hits"}`,
+    emptyText: state.lang === "zh" ? "暂无关键文件访问统计" : "No key-file access stats",
+  });
+}
+
+function renderWeeklyBrief(data) {
+  const summary = data.summary || {};
+  const alerts = data.alerts || [];
+  const anomalies = data.anomalies || {};
+  const brief = [];
+  brief.push({
+    level: summary.requestFailureRatePct > 8 ? "warn" : "info",
+    title: state.lang === "zh" ? "系统负载" : "System Load",
+    text:
+      state.lang === "zh"
+        ? `请求 ${fmtInt(summary.totalRequests)}，总 tokens ${fmtTokens(summary.totalTokens)}，成本 ${fmtUsd(summary.totalCost)}。`
+        : `Requests ${fmtInt(summary.totalRequests)}, total tokens ${fmtTokens(summary.totalTokens)}, cost ${fmtUsd(summary.totalCost)}.`,
+  });
+  brief.push({
+    level: summary.p95LatencyMs > 6000 ? "warn" : "info",
+    title: state.lang === "zh" ? "响应延迟" : "Latency",
+    text:
+      state.lang === "zh"
+        ? `平均 ${fmtMs(summary.avgLatencyMs)}，P95 ${fmtMs(summary.p95LatencyMs)}。`
+        : `Avg ${fmtMs(summary.avgLatencyMs)}, P95 ${fmtMs(summary.p95LatencyMs)}.`,
+  });
+  brief.push({
+    level: summary.qmdBackedRatePct < 40 ? "warn" : "info",
+    title: state.lang === "zh" ? "QMD 覆盖率" : "QMD Coverage",
+    text:
+      state.lang === "zh"
+        ? `回源占比 ${fmtPct(summary.qmdBackedRatePct)}，向量检索 ${fmtInt(summary.vectorSearches)} 次。`
+        : `Backed rate ${fmtPct(summary.qmdBackedRatePct)} across ${fmtInt(summary.vectorSearches)} vector searches.`,
+  });
+  if (summary.keyFileAccessHits > 0) {
+    brief.push({
+      level: "info",
+      title: state.lang === "zh" ? "关键文件访问" : "Key-File Access",
+      text:
+        state.lang === "zh"
+          ? `AGENT/TOOLS/SOUL/Memory 共访问 ${fmtInt(summary.keyFileAccessHits)} 次。`
+          : `${fmtInt(summary.keyFileAccessHits)} accesses for AGENT/TOOLS/SOUL/Memory.`,
+    });
+  }
+  if (anomalies?.requestFailureSpikes?.length) {
+    brief.push({
+      level: "bad",
+      title: state.lang === "zh" ? "异常告警" : "Anomaly Alert",
+      text:
+        state.lang === "zh"
+          ? `检测到 ${fmtInt(anomalies.requestFailureSpikes.length)} 次失败率尖峰，建议优先排查。`
+          : `${fmtInt(anomalies.requestFailureSpikes.length)} failure spikes detected; prioritize investigation.`,
+    });
+  } else if (alerts.length) {
+    brief.push({
+      level: "warn",
+      title: state.lang === "zh" ? "风险提示" : "Risk Signals",
+      text: alerts
+        .slice(0, 1)
+        .map((item) => item.title)
+        .join(" · "),
+    });
+  }
+
+  els.weeklyMeta.textContent = state.lang === "zh" ? "自动生成 · 每次刷新更新" : "Auto-generated · updates on each refresh";
+  els.weeklyBrief.innerHTML = brief
+    .slice(0, 5)
+    .map(
+      (item) =>
+        `<article class="brief-item ${esc(item.level)}"><strong>${esc(item.title)}</strong><div>${esc(item.text)}</div></article>`,
+    )
+    .join("");
+}
+
 function renderSessionWaterfall(session) {
   const spans = (session.waterfall || [])
     .filter((item) => typeof item.startTs === "number" && typeof item.endTs === "number")
@@ -479,13 +811,14 @@ function renderSessionWaterfall(session) {
       const x2 = pad + ((span.endTs - minTs) / fullRange) * innerW;
       const barWidth = Math.max(2, x2 - x1);
       const y = pad + i * (rowHeight + gap);
-      const color = span.error ? "#ff7f86" : "#5ad0ff";
+      const color = span.error ? "#ae7f73" : "#7f9688";
       return `<rect x="${x1.toFixed(2)}" y="${y.toFixed(2)}" width="${barWidth.toFixed(2)}" height="${rowHeight}" rx="3" fill="${color}" opacity="0.9"></rect>`;
     })
     .join("");
 
   const axisY = height - 14;
   const startLabel = new Date(minTs).toLocaleTimeString();
+  const midLabel = new Date(minTs + Math.floor(fullRange / 2)).toLocaleTimeString();
   const endLabel = new Date(maxTs).toLocaleTimeString();
 
   return `
@@ -494,12 +827,16 @@ function renderSessionWaterfall(session) {
       <span>${startLabel} → ${endLabel}</span>
     </div>
     <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" class="waterfall-svg">
-      <line x1="${pad}" y1="${axisY}" x2="${width - pad}" y2="${axisY}" stroke="rgba(164,198,232,0.35)" stroke-width="1"></line>
+      <line x1="${pad}" y1="${axisY}" x2="${width - pad}" y2="${axisY}" stroke="rgba(148,136,121,0.35)" stroke-width="1"></line>
+      <line x1="${(width / 2).toFixed(2)}" y1="${pad}" x2="${(width / 2).toFixed(2)}" y2="${axisY}" stroke="rgba(148,136,121,0.2)" stroke-width="1" stroke-dasharray="3 3"></line>
       ${bars}
+      <text x="${pad}" y="${height - 2}" text-anchor="start" fill="var(--muted)" font-size="10">${esc(startLabel)}</text>
+      <text x="${(width / 2).toFixed(2)}" y="${height - 2}" text-anchor="middle" fill="var(--muted)" font-size="10">${esc(midLabel)}</text>
+      <text x="${width - pad}" y="${height - 2}" text-anchor="end" fill="var(--muted)" font-size="10">${esc(endLabel)}</text>
     </svg>
     <div class="wf-legend">
-      <span><i style="background:#5ad0ff"></i> normal turn</span>
-      <span><i style="background:#ff7f86"></i> error turn</span>
+      <span><i style="background:#7f9688"></i> ${state.lang === "zh" ? "正常轮次" : "normal turn"}</span>
+      <span><i style="background:#ae7f73"></i> ${state.lang === "zh" ? "错误轮次" : "error turn"}</span>
     </div>
   `;
 }
@@ -510,13 +847,13 @@ function renderTimelineEvents(session) {
     .sort((a, b) => a.timestamp - b.timestamp)
     .slice(-14);
   if (!rows.length) {
-    return '<div class="muted">No timeline events.</div>';
+    return `<div class="muted">${state.lang === "zh" ? "暂无时间线事件。" : "No timeline events."}</div>`;
   }
   return rows
     .map((item) => {
       const stamp = new Date(item.timestamp).toLocaleTimeString();
       const tag = item.isError ? '<span class="tag bad">error</span>' : "";
-      const model = item.model ? `${item.provider ?? "unknown"}/${item.model}` : "n/a";
+      const model = item.model ? `${item.provider ?? "unknown"}/${item.model}` : state.lang === "zh" ? "无" : "n/a";
       return `
         <div class="tl-row">
           <div class="tl-head">
@@ -534,7 +871,7 @@ function renderTimelineEvents(session) {
 function renderInspector(session) {
   if (!session) {
     els.inspector.classList.add("empty");
-    els.inspector.textContent = "No session selected.";
+    els.inspector.textContent = t("session.none", "No session selected.");
     return;
   }
 
@@ -566,7 +903,7 @@ function renderInspector(session) {
 
 function renderSessions(data) {
   const rows = data.sessions || [];
-  els.sessionCount.textContent = `${rows.length} rows`;
+  els.sessionCount.textContent = state.lang === "zh" ? `${rows.length} 行` : `${rows.length} rows`;
 
   els.sessionsBody.innerHTML = rows
     .map((session) => {
@@ -601,7 +938,11 @@ function renderSessions(data) {
 
 function renderMemory(data) {
   const memory = data.memory;
-  els.memoryMeta.textContent = memory.exists ? memory.relativePath || memory.memoryDir : "memory dir not found";
+  els.memoryMeta.textContent = memory.exists
+    ? memory.relativePath || memory.memoryDir
+    : state.lang === "zh"
+      ? "未找到 memory 目录"
+      : "memory dir not found";
 
   const stats = [
     { label: "Files", value: fmtInt(memory.fileCount) },
@@ -620,7 +961,7 @@ function renderMemory(data) {
   els.memoryKeywords.innerHTML = (memory.keywords || [])
     .slice(0, 18)
     .map((item) => `<span class="chip">${esc(item.word)} · ${esc(item.count)}</span>`)
-    .join("") || '<span class="muted">No keywords.</span>';
+    .join("") || `<span class="muted">${state.lang === "zh" ? "暂无关键词。" : "No keywords."}</span>`;
 
   els.memoryFiles.innerHTML = (memory.files || [])
     .slice(0, 60)
@@ -634,7 +975,7 @@ function renderMemory(data) {
         </article>
       `,
     )
-    .join("") || '<div class="muted">No memory files found.</div>';
+    .join("") || `<div class="muted">${state.lang === "zh" ? "未发现记忆文件。" : "No memory files found."}</div>`;
 }
 
 function renderAnomalies(data) {
@@ -708,7 +1049,7 @@ function renderAnomalies(data) {
 function renderAlerts(data) {
   const alerts = data.alerts || [];
   if (!alerts.length) {
-    els.alerts.innerHTML = '<div class="alert info">No alerts. System currently looks healthy.</div>';
+    els.alerts.innerHTML = `<div class="alert info">${state.lang === "zh" ? "当前无告警，系统状态良好。" : "No alerts. System currently looks healthy."}</div>`;
     return;
   }
   els.alerts.innerHTML = alerts
@@ -741,29 +1082,38 @@ async function refreshCommandPreview() {
     if (premiumQuota) {
       params.set("premiumQuota", String(premiumQuota));
     }
+    params.set("lang", state.lang);
     params.set("maxItems", "8");
     const res = await fetch(`/api/command?${params.toString()}`, { cache: "no-store" });
     const payload = await res.json();
     if (!payload.ok) {
       throw new Error(payload.error || "command preview failed");
     }
-    els.commandPreview.textContent = payload.text || "(empty command output)";
+    els.commandPreview.textContent =
+      payload.text || (state.lang === "zh" ? "（命令输出为空）" : "(empty command output)");
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    els.commandPreview.textContent = `command preview failed: ${message}`;
+    els.commandPreview.textContent =
+      state.lang === "zh" ? `命令预览失败: ${message}` : `command preview failed: ${message}`;
   }
 }
 
 function updateFiltersFromData(data) {
-  selectOptions(els.agent, data.filters.options.agents || [], "All agents");
-  selectOptions(els.channel, data.filters.options.channels || [], "All channels");
+  selectOptions(els.agent, data.filters.options.agents || [], state.lang === "zh" ? "全部 Agent" : "All agents");
+  selectOptions(
+    els.channel,
+    data.filters.options.channels || [],
+    state.lang === "zh" ? "全部渠道" : "All channels",
+  );
 }
 
 function renderAll(data) {
   renderCards(data);
+  renderWeeklyBrief(data);
   renderTrend(data);
   renderRequestTrend(data);
   renderRequestHealth(data);
+  renderKeyFiles(data);
   renderQuota(data);
   renderVector(data);
   renderLatency(data);
@@ -773,7 +1123,10 @@ function renderAll(data) {
   renderMemory(data);
   renderAnomalies(data);
   renderAlerts(data);
-  els.generatedAt.textContent = `Generated ${fmtDate(data.generatedAt)} · range: ${data.range.days}`;
+  els.generatedAt.textContent =
+    state.lang === "zh"
+      ? `${t("status.generated", "生成时间")} ${fmtDate(data.generatedAt)} · 范围: ${data.range.days}`
+      : `${t("status.generated", "Generated")} ${fmtDate(data.generatedAt)} · range: ${data.range.days}`;
   void refreshCommandPreview();
 }
 
@@ -815,7 +1168,9 @@ async function fetchData() {
     renderAll(state.data);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    els.alerts.innerHTML = `<article class="alert bad"><strong>Data Load Failed</strong><div>${esc(message)}</div></article>`;
+    els.alerts.innerHTML = `<article class="alert bad"><strong>${esc(
+      state.lang === "zh" ? "数据加载失败" : "Data Load Failed",
+    )}</strong><div>${esc(message)}</div></article>`;
   } finally {
     setLoading(false);
   }
@@ -828,6 +1183,17 @@ function bindEvents() {
   els.days.addEventListener("change", fetchData);
   els.agent.addEventListener("change", fetchData);
   els.channel.addEventListener("change", fetchData);
+  els.lang.addEventListener("change", () => {
+    state.lang = els.lang.value === "en" ? "en" : "zh";
+    localStorage.setItem("openclaw_observatory_lang", state.lang);
+    applyI18n();
+    if (state.data) {
+      updateFiltersFromData(state.data);
+      renderAll(state.data);
+    } else {
+      fetchData();
+    }
+  });
   els.requestQuota.addEventListener("change", () => {
     localStorage.setItem("openclaw_observatory_request_quota", els.requestQuota.value || "");
     fetchData();
@@ -847,6 +1213,9 @@ function bindEvents() {
   }
 }
 
+state.lang = localStorage.getItem("openclaw_observatory_lang") === "en" ? "en" : "zh";
+els.lang.value = state.lang;
+applyI18n();
 els.requestQuota.value = localStorage.getItem("openclaw_observatory_request_quota") || "";
 els.premiumQuota.value = localStorage.getItem("openclaw_observatory_premium_quota") || "";
 for (const button of els.commandButtons) {

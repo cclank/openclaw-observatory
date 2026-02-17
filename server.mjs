@@ -180,6 +180,7 @@ async function main() {
         const text = buildCommandText(payload, {
           command,
           maxItems: asNumber(query.maxItems, 6),
+          lang: typeof query.lang === "string" ? query.lang : undefined,
         });
         json(res, 200, { ok: true, command, text });
       } catch (error) {
@@ -215,6 +216,7 @@ async function main() {
         const text = buildCommandText(payload, {
           command,
           maxItems: asNumber(query.maxItems, 6),
+          lang: typeof query.lang === "string" ? query.lang : undefined,
         });
         res.writeHead(200, {
           "content-type": "text/plain; charset=utf-8",
