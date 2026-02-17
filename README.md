@@ -2,6 +2,10 @@
 
 English | [简体中文](README.zh-CN.md)
 
+[![Node.js >=22](https://img.shields.io/badge/node-%3E%3D22-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![License](https://img.shields.io/github/license/cclank/openclaw-observatory)](LICENSE)
+[![Last Commit](https://img.shields.io/github/last-commit/cclank/openclaw-observatory)](https://github.com/cclank/openclaw-observatory/commits/main)
+
 OpenClaw Observatory is a standalone observability toolkit for OpenClaw.
 It provides dashboard analytics and bot-friendly command summaries for request usage, token cost, latency, and QMD/vector retrieval quality.
 
@@ -58,6 +62,26 @@ npm run start -- --port 3188
 Dashboard URL:
 
 - `http://127.0.0.1:3188`
+
+## Remote Access via SSH Port Forwarding
+
+By default, the server binds to loopback (`127.0.0.1`), so it is not directly reachable from remote machines.
+
+If OpenClaw Observatory runs on a remote host, forward the port locally:
+
+```bash
+ssh -L 3188:127.0.0.1:3188 <user>@<remote-host>
+```
+
+Then open locally:
+
+- `http://127.0.0.1:3188`
+
+Example:
+
+```bash
+ssh -L 3188:127.0.0.1:3188 user@gateway-host
+```
 
 ## CLI Usage
 

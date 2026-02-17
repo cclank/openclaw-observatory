@@ -2,6 +2,10 @@
 
 [English](README.md) | 简体中文
 
+[![Node.js >=22](https://img.shields.io/badge/node-%3E%3D22-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![License](https://img.shields.io/github/license/cclank/openclaw-observatory)](LICENSE)
+[![Last Commit](https://img.shields.io/github/last-commit/cclank/openclaw-observatory)](https://github.com/cclank/openclaw-observatory/commits/main)
+
 OpenClaw Observatory 是一个面向 OpenClaw 的独立可观测性工具集。
 它提供 Dashboard 可视化和适配机器人转发的命令摘要，覆盖请求量、Token 成本、延迟、以及 QMD/向量检索质量。
 
@@ -60,6 +64,26 @@ npm run start -- --port 3188
 打开 Dashboard：
 
 - `http://127.0.0.1:3188`
+
+## 通过 SSH 端口转发远程访问
+
+默认情况下服务监听在 `127.0.0.1`（仅本机回环），远程机器不能直接访问。
+
+如果 OpenClaw Observatory 运行在远程主机，可在本地执行端口转发：
+
+```bash
+ssh -L 3188:127.0.0.1:3188 <user>@<remote-host>
+```
+
+然后在本地浏览器打开：
+
+- `http://127.0.0.1:3188`
+
+示例：
+
+```bash
+ssh -L 3188:127.0.0.1:3188 user@gateway-host
+```
 
 ## CLI 用法
 
