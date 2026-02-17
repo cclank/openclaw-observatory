@@ -1,0 +1,156 @@
+# OpenClaw Observatory
+
+[English](README.md) | 简体中文
+
+OpenClaw Observatory 是一个面向 OpenClaw 的独立可观测性工具集。
+它提供 Dashboard 可视化和适配机器人转发的命令摘要，覆盖请求量、Token 成本、延迟、以及 QMD/向量检索质量。
+
+## 核心能力
+
+- 请求监控（类 Copilot 请求视角）
+  - 总请求、可计费请求、高级请求
+  - 成功/失败/超时/取消拆分
+  - 配额追踪与临界告警
+- Token、成本与延迟监控
+  - 按日趋势
+  - 尾延迟（p95）
+  - 模型、Provider、工具分布
+- QMD/向量检索监控
+  - `memory_search` 与向量检索调用量、错误率
+  - QMD-backed 检索占比
+  - 热门 query、collection、path 明细
+  - `memory_get` 在 `qmd/...` 路径的使用情况
+- 会话级诊断
+  - 瀑布图时间线
+  - 关键事件明细
+  - 模型切换统计
+- Telegram/Discord 命令摘要输出
+  - `summary`、`quota`、`qmd`、`alerts`、`daily`
+
+## 架构说明
+
+```text
+.
+├─ collector.mjs      # 采集、聚合、异常、告警、命令摘要格式化
+├─ server.mjs         # Dashboard 服务与 HTTP API
+├─ bot-command.mjs    # 面向机器人集成的命令摘要 CLI
+├─ public/            # Dashboard 前端
+├─ package.json
+├─ README.md
+└─ README.zh-CN.md
+```
+
+## 设计原则
+
+- 非侵入：仅读取 OpenClaw 现有状态文件
+- 独立化：不修改 OpenClaw 核心运行路径
+- 只读采集：本地文件系统扫描，不写入业务数据
+
+## 运行要求
+
+- Node.js `22+`
+- OpenClaw 状态目录（默认 `~/.openclaw`）
+
+## 快速开始
+
+```bash
+npm run start -- --port 3188
+```
+
+打开 Dashboard：
+
+- `http://127.0.0.1:3188`
+
+## CLI 用法
+
+采集 JSON：
+
+```bash
+node collector.mjs --days 30 --pretty --out /tmp/openclaw-observability.json
+```
+
+输出命令摘要（纯文本）：
+
+```bash
+node collector.mjs --days 7 --command summary
+node collector.mjs --days 7 --command qmd
+node collector.mjs --days 7 --command alerts --max-items 10
+```
+
+机器人命令入口：
+
+```bash
+node bot-command.mjs --cmd summary --days 7
+```
+
+## HTTP API
+
+- `GET /api/health`：健康检查
+- `GET /api/collect`：完整指标 JSON
+- `GET /api/command`：命令摘要（JSON）
+- `GET /command.txt`：命令摘要（纯文本，适合机器人直转发）
+
+### 命令 API 示例
+
+```text
+/api/command?cmd=summary&days=7&requestQuota=2000&premiumQuota=300
+```
+
+支持的 `cmd`：
+
+- `summary`
+- `quota`
+- `qmd`
+- `alerts`
+- `daily`
+- `help`
+
+## Telegram / Discord 集成建议
+
+推荐命令映射：
+
+- `/oc summary` -> `cmd=summary`
+- `/oc quota` -> `cmd=quota`
+- `/oc qmd` -> `cmd=qmd`
+- `/oc alerts` -> `cmd=alerts`
+- `/oc daily` -> `cmd=daily`
+
+示例地址：
+
+```text
+http://127.0.0.1:3188/command.txt?cmd=summary&days=7
+```
+
+## 关键参数
+
+通用参数（`collector.mjs`、`bot-command.mjs`、API query）：
+
+- `days`、`agent`、`channel`
+- `sessionLimit`、`memoryLimit`、`timelineLimit`
+- `requestQuota`、`premiumQuota`
+- `premiumModelPattern`
+- `maxItems`（命令摘要最大条目数）
+
+## 环境变量
+
+- `OPENCLAW_STATE_DIR`
+- `OPENCLAW_WORKSPACE_DIR`
+- `OPENCLAW_REQUEST_QUOTA`
+- `OPENCLAW_PREMIUM_REQUEST_QUOTA`
+- `OPENCLAW_PREMIUM_MODEL_PATTERN`
+
+## 验证
+
+```bash
+npm run check
+node collector.mjs --days 7 --command summary
+node collector.mjs --days 7 --command qmd
+node server.mjs --port 3188
+```
+
+## 已知限制
+
+- 会话解析为 best-effort，损坏行会被跳过
+- 成本统计依赖上游 transcript 元数据完整度
+- QMD/向量识别采用工具级启发式规则
+- 异常检测用于运维信号，不等价于严格 SLO 判定
