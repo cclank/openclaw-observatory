@@ -38,8 +38,6 @@ async function main() {
     sessionLimit: asNumber(args["session-limit"], 250),
     memoryLimit: asNumber(args["memory-limit"], 100),
     timelineLimit: asNumber(args["timeline-limit"], 240),
-    requestQuota: asNumber(args["request-quota"], NaN),
-    premiumQuota: asNumber(args["premium-quota"], NaN),
     premiumModelPattern:
       typeof args["premium-model-pattern"] === "string"
         ? args["premium-model-pattern"]

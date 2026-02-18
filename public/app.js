@@ -5,10 +5,6 @@ const els = {
   lang: document.getElementById("langSelect"),
   refresh: document.getElementById("refreshBtn"),
   cards: document.getElementById("kpiCards"),
-  storyMeta: document.getElementById("storyMeta"),
-  storyline: document.getElementById("storyline"),
-  weeklyMeta: document.getElementById("weeklyMeta"),
-  weeklyBrief: document.getElementById("weeklyBrief"),
   trend: document.getElementById("trendChart"),
   trendMeta: document.getElementById("trendMeta"),
   requestTrend: document.getElementById("requestTrendChart"),
@@ -21,12 +17,14 @@ const els = {
   vectorMeta: document.getElementById("vectorMeta"),
   vectorStats: document.getElementById("vectorStats"),
   vectorCollections: document.getElementById("vectorCollections"),
-  costMethodMeta: document.getElementById("costMethodMeta"),
-  costMethod: document.getElementById("costMethod"),
+  vectorErrorsMeta: document.getElementById("vectorErrorsMeta"),
+  vectorErrors: document.getElementById("vectorErrors"),
   latency: document.getElementById("latencyChart"),
   latencyMeta: document.getElementById("latencyMeta"),
   models: document.getElementById("modelsList"),
   tools: document.getElementById("toolsList"),
+  toolDrilldownMeta: document.getElementById("toolDrilldownMeta"),
+  toolDrilldown: document.getElementById("toolDrilldown"),
   requestModels: document.getElementById("requestModelsList"),
   requestChannels: document.getElementById("requestChannelsList"),
   unknownBreakdownMeta: document.getElementById("unknownBreakdownMeta"),
@@ -57,7 +55,12 @@ const state = {
   commandMode: "summary",
   lang: "zh",
   memoryQuery: "",
-  focusDate: null,
+  selectedTool: null,
+  selectedVectorError: null,
+  memoryDetailPath: null,
+  memoryDetailLoadingPath: null,
+  memoryDetailError: "",
+  memoryDetailCache: new Map(),
 };
 
 const charts = new Map();
@@ -74,16 +77,15 @@ const I18N = {
     "label.language": "Language",
     "action.refresh": "Refresh",
     "action.loading": "Loading…",
-    "weekly.title": "Intelligent Weekly Brief",
-    "story.title": "Cross-Metric Storyline",
     "chart.tokenCost": "Daily Token + Cost Trend",
     "chart.latency": "Response Latency",
     "chart.requestVolume": "Request Volume",
     "chart.requestReliability": "Request Reliability",
     "chart.qmd": "QMD and Vector Retrieval",
-    "chart.costMethod": "Cost Methodology",
+    "chart.vectorErrors": "Vector Error Details",
     "chart.topModels": "Top Models",
     "chart.topTools": "Top Tools",
+    "chart.toolDrilldown": "Tool Drilldown",
     "chart.requestByModel": "Request by Model",
     "chart.requestByChannel": "Request by Channel",
     "chart.unknownBreakdown": "Unknown Source Breakdown",
@@ -121,16 +123,15 @@ const I18N = {
     "label.language": "语言",
     "action.refresh": "刷新",
     "action.loading": "加载中…",
-    "weekly.title": "智能周报卡片",
-    "story.title": "跨指标智能解读",
     "chart.tokenCost": "每日 Tokens 与成本趋势",
     "chart.latency": "响应延迟趋势",
     "chart.requestVolume": "请求量趋势",
     "chart.requestReliability": "请求可靠性",
-    "chart.qmd": "QMD 与向量检索",
-    "chart.costMethod": "成本计费口径",
+    "chart.qmd": "QMD 与向量检索（QMD 回源占比）",
+    "chart.vectorErrors": "向量检索错误明细",
     "chart.topModels": "模型 Top 排行",
     "chart.topTools": "工具 Top 排行",
+    "chart.toolDrilldown": "工具下钻分析",
     "chart.requestByModel": "按模型请求分布",
     "chart.requestByChannel": "按渠道请求分布",
     "chart.unknownBreakdown": "Unknown 来源细分",
@@ -303,8 +304,8 @@ function renderCards(data) {
       value: fmtUsd(data.summary.totalCost),
       hint:
         state.lang === "zh"
-          ? `元数据 ${fmtPct(data.cost?.metadataSharePct ?? 0)} · 估算 ${fmtPct(data.cost?.estimatedSharePct ?? 0)}`
-          : `metadata ${fmtPct(data.cost?.metadataSharePct ?? 0)} · estimated ${fmtPct(data.cost?.estimatedSharePct ?? 0)}`,
+          ? "模型维度估算值（实际以供应商账单为准）"
+          : "model-aware estimate (billing provider is source of truth)",
     },
     {
       label: state.lang === "zh" ? "请求失败率" : "Request Failure",
@@ -360,15 +361,72 @@ function getChart(mount, key) {
   return charts.get(key);
 }
 
-function setFocusDate(date) {
-  if (!date || !state.data) {
-    return;
+function compactAxisValue(value) {
+  if (!Number.isFinite(value)) {
+    return "-";
   }
-  state.focusDate = date;
-  renderStoryline(state.data);
+  if (Math.abs(value) >= 1_000_000) {
+    return `${(value / 1_000_000).toFixed(1)}M`;
+  }
+  if (Math.abs(value) >= 1_000) {
+    return `${(value / 1_000).toFixed(1)}K`;
+  }
+  return String(Math.round(value));
 }
 
-function renderInteractiveDualChart({ key, mount, labels, seriesA, seriesB, nameA, nameB, colorA, colorB }) {
+function axisTokens(value) {
+  if (!Number.isFinite(value)) {
+    return "-";
+  }
+  if (Math.abs(value) >= 1_000_000) {
+    return `${(value / 1_000_000).toFixed(1)}M`;
+  }
+  if (Math.abs(value) >= 1_000) {
+    return `${(value / 1_000).toFixed(1)}K`;
+  }
+  return value.toFixed(0);
+}
+
+function axisUsd(value) {
+  if (!Number.isFinite(value)) {
+    return "-";
+  }
+  const abs = Math.abs(value);
+  if (abs >= 100) {
+    return `$${value.toFixed(0)}`;
+  }
+  if (abs >= 1) {
+    return `$${value.toFixed(2)}`;
+  }
+  if (abs >= 0.01) {
+    return `$${value.toFixed(3)}`;
+  }
+  return `$${value.toFixed(4)}`;
+}
+
+function axisMs(value) {
+  if (!Number.isFinite(value)) {
+    return "-";
+  }
+  if (value >= 1000) {
+    return `${(value / 1000).toFixed(1)}s`;
+  }
+  return `${Math.round(value)}ms`;
+}
+
+function renderInteractiveDualChart({
+  key,
+  mount,
+  labels,
+  seriesA,
+  seriesB,
+  nameA,
+  nameB,
+  colorA,
+  colorB,
+  axisAFormatter = (value) => compactAxisValue(value),
+  axisBFormatter = (value) => compactAxisValue(value),
+}) {
   if (!mount) {
     return;
   }
@@ -394,18 +452,27 @@ function renderInteractiveDualChart({ key, mount, labels, seriesA, seriesB, name
         top: 0,
         textStyle: { color: "#71685d", fontSize: 11 },
       },
-      grid: { left: 44, right: 20, top: 34, bottom: 42 },
+      grid: { left: 14, right: 14, top: 34, bottom: 44, containLabel: true },
       xAxis: {
         type: "category",
         data: labels,
-        axisLabel: { color: "#7d756a" },
+        axisLabel: { color: "#655d53", fontSize: 11, hideOverlap: false },
         axisLine: { lineStyle: { color: "#b8ae9f" } },
       },
-      yAxis: {
-        type: "value",
-        axisLabel: { color: "#7d756a" },
-        splitLine: { lineStyle: { color: "rgba(148,136,121,0.16)" } },
-      },
+      yAxis: [
+        {
+          type: "value",
+          axisLabel: { color: "#655d53", fontSize: 11, formatter: axisAFormatter },
+          axisLine: { show: true, lineStyle: { color: "rgba(125,117,106,0.25)" } },
+          splitLine: { lineStyle: { color: "rgba(148,136,121,0.16)" } },
+        },
+        {
+          type: "value",
+          axisLabel: { color: "#655d53", fontSize: 11, formatter: axisBFormatter },
+          axisLine: { show: true, lineStyle: { color: "rgba(125,117,106,0.25)" } },
+          splitLine: { show: false },
+        },
+      ],
       dataZoom: [
         { type: "inside", xAxisIndex: 0, filterMode: "none" },
         { type: "slider", xAxisIndex: 0, height: 14, bottom: 8, brushSelect: false },
@@ -418,6 +485,7 @@ function renderInteractiveDualChart({ key, mount, labels, seriesA, seriesB, name
           symbol: "circle",
           symbolSize: 6,
           data: seriesA,
+          yAxisIndex: 0,
           lineStyle: { width: 2.2 },
           areaStyle: { opacity: 0.08 },
           emphasis: { focus: "series" },
@@ -429,6 +497,7 @@ function renderInteractiveDualChart({ key, mount, labels, seriesA, seriesB, name
           symbol: "diamond",
           symbolSize: 6,
           data: seriesB,
+          yAxisIndex: 1,
           lineStyle: { width: 2.2, type: "dashed" },
           emphasis: { focus: "series" },
         },
@@ -436,75 +505,6 @@ function renderInteractiveDualChart({ key, mount, labels, seriesA, seriesB, name
     },
     true,
   );
-  chart.off("click");
-  chart.on("click", (params) => {
-    if (typeof params?.dataIndex === "number") {
-      setFocusDate(labels[params.dataIndex]);
-    }
-  });
-}
-
-function renderStoryline(data) {
-  const daily = data.aggregates.daily || [];
-  if (!daily.length) {
-    els.storyMeta.textContent = state.lang === "zh" ? "无时间序列数据" : "No time-series data";
-    els.storyline.innerHTML = `<article class="brief-item info">${
-      state.lang === "zh" ? "暂无可解读趋势。" : "No storyline available yet."
-    }</article>`;
-    return;
-  }
-  const focused = daily.find((row) => row.date === state.focusDate) || daily[daily.length - 1];
-  state.focusDate = focused.date;
-  const recent = daily.slice(-7);
-  const avgReq = recent.reduce((sum, row) => sum + (row.requests ?? 0), 0) / Math.max(1, recent.length);
-  const avgErr = recent.reduce((sum, row) => sum + (row.requestErrors ?? 0), 0) / Math.max(1, recent.length);
-  const avgTokens = recent.reduce((sum, row) => sum + (row.tokens ?? 0), 0) / Math.max(1, recent.length);
-
-  const reqDelta = (focused.requests ?? 0) - avgReq;
-  const tokenDelta = (focused.tokens ?? 0) - avgTokens;
-  const errDelta = (focused.requestErrors ?? 0) - avgErr;
-
-  els.storyMeta.textContent =
-    state.lang === "zh" ? `焦点日期: ${focused.date}（点击任意图表点可切换）` : `Focus date: ${focused.date} (click any chart point)`;
-
-  const rows = [
-    {
-      level: Math.abs(reqDelta) > avgReq * 0.5 ? "warn" : "info",
-      title: state.lang === "zh" ? "负载波动" : "Load Movement",
-      text:
-        state.lang === "zh"
-          ? `请求 ${fmtInt(focused.requests ?? 0)}，较近7日均值 ${reqDelta >= 0 ? "+" : ""}${fmtInt(Math.round(reqDelta))}。`
-          : `Requests ${fmtInt(focused.requests ?? 0)}, vs 7d mean ${reqDelta >= 0 ? "+" : ""}${fmtInt(Math.round(reqDelta))}.`,
-    },
-    {
-      level: Math.abs(tokenDelta) > avgTokens * 0.5 ? "warn" : "info",
-      title: state.lang === "zh" ? "Token 消耗" : "Token Consumption",
-      text:
-        state.lang === "zh"
-          ? `Tokens ${fmtTokens(focused.tokens ?? 0)}，成本 ${fmtUsd(focused.cost ?? 0)}。`
-          : `Tokens ${fmtTokens(focused.tokens ?? 0)}, cost ${fmtUsd(focused.cost ?? 0)}.`,
-    },
-    {
-      level: (focused.requestErrors ?? 0) > 0 || errDelta > 1 ? "bad" : "info",
-      title: state.lang === "zh" ? "稳定性" : "Reliability",
-      text:
-        state.lang === "zh"
-          ? `失败 ${fmtInt(focused.requestErrors ?? 0)}，超时 ${fmtInt(focused.requestTimeouts ?? 0)}。`
-          : `Failures ${fmtInt(focused.requestErrors ?? 0)}, timeouts ${fmtInt(focused.requestTimeouts ?? 0)}.`,
-    },
-    {
-      level: (focused.qmdBackedSearches ?? 0) === 0 && (focused.vectorSearches ?? 0) > 0 ? "warn" : "info",
-      title: state.lang === "zh" ? "检索路径" : "Retrieval Path",
-      text:
-        state.lang === "zh"
-          ? `向量检索 ${fmtInt(focused.vectorSearches ?? 0)}，QMD 回源 ${fmtInt(focused.qmdBackedSearches ?? 0)}。`
-          : `Vector ${fmtInt(focused.vectorSearches ?? 0)}, QMD-backed ${fmtInt(focused.qmdBackedSearches ?? 0)}.`,
-    },
-  ];
-
-  els.storyline.innerHTML = rows
-    .map((row) => `<article class="brief-item ${row.level}"><strong>${esc(row.title)}</strong><div>${esc(row.text)}</div></article>`)
-    .join("");
 }
 
 function renderTrend(data) {
@@ -527,6 +527,8 @@ function renderTrend(data) {
     nameB: state.lang === "zh" ? "成本" : "Cost",
     colorA: "#7f9688",
     colorB: "#ba9a73",
+    axisAFormatter: axisTokens,
+    axisBFormatter: axisUsd,
   });
 }
 
@@ -545,6 +547,8 @@ function renderLatency(data) {
     nameB: "P95",
     colorA: "#819786",
     colorB: "#b78578",
+    axisAFormatter: axisMs,
+    axisBFormatter: axisMs,
   });
 }
 
@@ -563,6 +567,8 @@ function renderRequestTrend(data) {
     nameB: state.lang === "zh" ? "高级" : "Premium",
     colorA: "#7b9584",
     colorB: "#c4a77f",
+    axisAFormatter: compactAxisValue,
+    axisBFormatter: compactAxisValue,
   });
 }
 
@@ -579,6 +585,8 @@ function renderRequestHealth(data) {
     nameB: state.lang === "zh" ? "超时" : "Timeouts",
     colorA: "#af7f72",
     colorB: "#c4a77f",
+    axisAFormatter: compactAxisValue,
+    axisBFormatter: compactAxisValue,
   });
 }
 
@@ -628,7 +636,10 @@ function renderVector(data) {
       sub: `${fmtInt(vector.qmdMemoryGetCalls)} qmd paths`,
     },
   ];
-  els.vectorMeta.textContent = `${fmtInt(vector.searchCalls)} searches`;
+  els.vectorMeta.textContent =
+    state.lang === "zh"
+      ? `${fmtInt(vector.searchCalls)} 次检索 · QMD 回源 ${fmtPct(vector.qmdBackedRatePct)}（命中 qmd/* 或 provider=qmd）`
+      : `${fmtInt(vector.searchCalls)} searches · QMD-backed ${fmtPct(vector.qmdBackedRatePct)} (qmd/* hit or provider=qmd)`;
   els.vectorStats.innerHTML = rows
     .map(
       (row) =>
@@ -639,40 +650,48 @@ function renderVector(data) {
     .slice(0, 12)
     .map((item) => `<span class="chip">${esc(item.collection)} · ${esc(item.count)}</span>`)
     .join("") || `<span class="muted">${state.lang === "zh" ? "未观察到 QMD collection" : "No QMD collections observed."}</span>`;
-}
-
-function renderCostMethod(data) {
-  const cost = data.cost || {};
-  els.costMethodMeta.textContent = `pricing: ${cost.pricingVersion ?? "-"}`;
-  const cards = [
-    {
-      level: "info",
-      title: state.lang === "zh" ? "计费来源结构" : "Cost Source Mix",
-      text:
-        state.lang === "zh"
-          ? `元数据 ${fmtPct(cost.metadataSharePct ?? 0)}，估算 ${fmtPct(cost.estimatedSharePct ?? 0)}。`
-          : `Metadata ${fmtPct(cost.metadataSharePct ?? 0)}, estimated ${fmtPct(cost.estimatedSharePct ?? 0)}.`,
-    },
-    {
-      level: "info",
-      title: state.lang === "zh" ? "条目覆盖" : "Entry Coverage",
-      text:
-        state.lang === "zh"
-          ? `元数据条目 ${fmtInt(cost.metadataCostEntries ?? 0)}，估算条目 ${fmtInt(cost.estimatedCostEntries ?? 0)}，缺失 ${fmtInt(cost.missingCostEntries ?? 0)}。`
-          : `Metadata entries ${fmtInt(cost.metadataCostEntries ?? 0)}, estimated ${fmtInt(cost.estimatedCostEntries ?? 0)}, missing ${fmtInt(cost.missingCostEntries ?? 0)}.`,
-    },
-    {
-      level: "warn",
-      title: state.lang === "zh" ? "口径说明" : "Method Note",
-      text:
-        state.lang === "zh"
-          ? "优先读取 transcript 内 cost；若缺失，按模型定价映射估算。各模型费率不同，可通过 OPENCLAW_MODEL_PRICING_JSON 覆盖。"
-          : "Use transcript cost first; fallback to model pricing estimate when missing. Rates differ by model and can be overridden via OPENCLAW_MODEL_PRICING_JSON.",
-    },
-  ];
-  els.costMethod.innerHTML = cards
-    .map((row) => `<article class="alert ${row.level}"><strong>${esc(row.title)}</strong><div>${esc(row.text)}</div></article>`)
+  const topErrors = Array.isArray(vector.topErrors) ? vector.topErrors : [];
+  const samples = Array.isArray(vector.errorSamples) ? vector.errorSamples : [];
+  if (els.vectorErrorsMeta) {
+    els.vectorErrorsMeta.textContent =
+      state.lang === "zh"
+        ? `${fmtInt(vector.searchErrors ?? 0)} errors · 点击标签查看`
+        : `${fmtInt(vector.searchErrors ?? 0)} errors · click tags to inspect`;
+  }
+  if (!els.vectorErrors) {
+    return;
+  }
+  if (!topErrors.length) {
+    els.vectorErrors.innerHTML = `<div class="muted">${state.lang === "zh" ? "当前无向量检索错误。" : "No vector retrieval errors in range."}</div>`;
+    return;
+  }
+  const selected = state.selectedVectorError || topErrors[0].error;
+  state.selectedVectorError = selected;
+  const sampleRows = samples.filter((row) => row.error === selected).slice(0, 20);
+  const heads = topErrors
+    .slice(0, 10)
+    .map((row) => {
+      const active = row.error === selected;
+      return `<button class="cmd-btn${active ? " active" : ""}" data-vecerr="${esc(row.error)}">${esc(row.error)} (${fmtInt(row.count)})</button>`;
+    })
     .join("");
+  const details =
+    sampleRows
+      .map(
+        (row) => `<article class="memory-file">
+        <div class="name">${esc(row.error)}</div>
+        <div class="path">${esc(row.sessionId ?? "-")} · ${esc(row.date ?? "-")}</div>
+        <div class="muted">${esc(row.tool ?? "-")} · ${esc(row.query ?? row.path ?? "-")}</div>
+      </article>`,
+      )
+      .join("") || `<div class="muted">${state.lang === "zh" ? "暂无样本细节。" : "No sample rows."}</div>`;
+  els.vectorErrors.innerHTML = `<div class="command-toolbar">${heads}</div><div>${details}</div>`;
+  els.vectorErrors.querySelectorAll("[data-vecerr]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.selectedVectorError = button.getAttribute("data-vecerr");
+      renderVector(data);
+    });
+  });
 }
 
 function renderRankings(data) {
@@ -685,17 +704,86 @@ function renderRankings(data) {
     emptyText: state.lang === "zh" ? "暂无模型使用" : "No model usage",
   });
 
-  const toolRows = (data.aggregates.tools || []).slice(0, 12);
-  renderBars({
-    mount: els.tools,
-    rows: toolRows,
-    valueGetter: (row) => row.count,
-    labelGetter: (row) => row.name,
-    valueFormatter: (value) => `${fmtInt(value)} ${state.lang === "zh" ? "次" : "calls"}`,
-    emptyText:
+  const toolRows = (data.aggregates.tools || []).slice(0, 16);
+  if (!toolRows.length) {
+    els.tools.innerHTML = `<div class="muted">${
       state.lang === "zh"
         ? "暂无工具调用；若确认有工具调用，请检查会话日志是否包含 tool_use/tool_result 或 toolCalls 字段。"
-        : "No tool calls; if you expect calls, verify session logs include tool_use/tool_result or toolCalls fields.",
+        : "No tool calls; if you expect calls, verify session logs include tool_use/tool_result or toolCalls fields."
+    }</div>`;
+  } else {
+    const max = Math.max(...toolRows.map((row) => row.count), 1);
+    els.tools.innerHTML = toolRows
+      .map((row) => {
+        const width = (row.count / max) * 100;
+        const active = state.selectedTool === row.name;
+        return `
+          <div class="bar-row">
+            <div class="bar-head">
+              <button class="cmd-btn${active ? " active" : ""}" data-tool="${esc(row.name)}">${esc(row.name)}</button>
+              <span>${fmtInt(row.count)} ${state.lang === "zh" ? "次" : "calls"}</span>
+            </div>
+            <div class="bar-track"><div class="bar-fill" style="width:${width.toFixed(2)}%"></div></div>
+          </div>
+        `;
+      })
+      .join("");
+    els.tools.querySelectorAll("[data-tool]").forEach((button) => {
+      button.addEventListener("click", () => {
+        state.selectedTool = button.getAttribute("data-tool");
+        renderRankings(data);
+      });
+    });
+  }
+
+  const drillRows = Array.isArray(data.aggregates.toolDrilldown) ? data.aggregates.toolDrilldown : [];
+  const tool = drillRows.find((row) => row.name === state.selectedTool) || drillRows[0] || null;
+  if (tool) {
+    state.selectedTool = tool.name;
+  }
+  if (!tool) {
+    els.toolDrilldownMeta.textContent = state.lang === "zh" ? "无工具数据" : "No tool data";
+    els.toolDrilldown.innerHTML = `<div class="muted">${state.lang === "zh" ? "暂无可下钻项。" : "No drilldown data."}</div>`;
+    return;
+  }
+  els.toolDrilldownMeta.textContent =
+    state.lang === "zh"
+      ? `${tool.name} · ${fmtInt(tool.totalCalls)} 次调用 · ${fmtInt(tool.sessions)} 会话`
+      : `${tool.name} · ${fmtInt(tool.totalCalls)} calls · ${fmtInt(tool.sessions)} sessions`;
+  const byAgent = (tool.byAgent || [])
+    .slice(0, 6)
+    .map((row) => `${row.agentId}: ${fmtInt(row.count)}`)
+    .join(" · ");
+  const byChannel = (tool.byChannel || [])
+    .slice(0, 6)
+    .map((row) => `${row.channel}: ${fmtInt(row.count)}`)
+    .join(" · ");
+  const topSessions = (tool.topSessions || [])
+    .slice(0, 8)
+    .map(
+      (row) => `<article class="memory-file">
+      <div class="name">${esc(row.label || row.sessionId || "-")}</div>
+      <div class="path">${esc(row.agentId || "-")} · ${esc(row.channel || "unknown")}</div>
+      <div class="muted">${fmtInt(row.count || 0)} ${state.lang === "zh" ? "次" : "calls"} · ${esc(fmtDate(row.updatedAt))}</div>
+      <button class="cmd-btn" type="button" data-drill-session="${esc(row.id || "")}">${state.lang === "zh" ? "打开会话" : "Open Session"}</button>
+    </article>`,
+    )
+    .join("");
+  els.toolDrilldown.innerHTML = `
+    <article class="alert info"><strong>${state.lang === "zh" ? "按 Agent" : "By Agent"}</strong><div>${esc(byAgent || "-")}</div></article>
+    <article class="alert info"><strong>${state.lang === "zh" ? "按渠道" : "By Channel"}</strong><div>${esc(byChannel || "-")}</div></article>
+    <div class="memory-files">${topSessions || `<div class="muted">${state.lang === "zh" ? "暂无会话样本。" : "No session samples."}</div>`}</div>
+  `;
+  els.toolDrilldown.querySelectorAll("[data-drill-session]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const id = button.getAttribute("data-drill-session");
+      if (!id || !state.data) {
+        return;
+      }
+      state.selectedSessionId = id;
+      renderSessions(state.data);
+      els.inspector?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
   });
 }
 
@@ -720,7 +808,7 @@ function renderRequestBreakdowns(data) {
     emptyText: "No request-channel data",
   });
 
-  const unknownRows = (data.aggregates.unknownChannelBreakdown || []).slice(0, 8);
+  const unknownRows = (data.aggregates.unknownChannelBreakdown || []).slice(0, 12);
   const unknownReq = unknownRows.reduce((sum, row) => sum + (row.total ?? 0), 0);
   els.unknownBreakdownMeta.textContent =
     unknownRows.length > 0
@@ -741,17 +829,37 @@ function renderRequestBreakdowns(data) {
         : `${fmtInt(value)} req · ${fmtInt(row.sessions ?? 0)} sessions`,
     emptyText: state.lang === "zh" ? "暂无 unknown 细分数据" : "No unknown breakdown data",
   });
+  const samples = Array.isArray(data.aggregates.unknownChannelSamples)
+    ? data.aggregates.unknownChannelSamples.slice(0, 8)
+    : [];
+  if (samples.length && els.unknownBreakdown) {
+    const rows = samples
+      .map(
+        (row) => `<article class="memory-file">
+      <div class="name">${esc(
+        state.lang === "zh"
+          ? row.typeLabelZh || row.typeLabel || row.type || "unknown"
+          : row.typeLabel || row.type || "unknown",
+      )}</div>
+      <div class="path">${esc(row.agentId || "-")} · ${esc(row.sessionId || "-")}</div>
+      <div class="muted">${esc(row.reason || "-")} · ${esc(fmtDate(row.updatedAt))}</div>
+    </article>`,
+      )
+      .join("");
+    els.unknownBreakdown.innerHTML += `<div class="memory-files">${rows}</div>`;
+  }
 }
 
 function renderKeyFiles(data) {
   const keyFiles = data.keyFiles || { totals: [], daily: [] };
   const dailyRows = Array.isArray(keyFiles.daily) ? keyFiles.daily : [];
   const totalHits = Number.isFinite(keyFiles.totalHits) ? keyFiles.totalHits : 0;
+  const eventCount = Number.isFinite(keyFiles.eventCount) ? keyFiles.eventCount : 0;
   if (dailyRows.length > 0) {
     els.keyFileMeta.textContent =
       state.lang === "zh"
-        ? `${dailyRows.length} 天 · 累计 ${fmtInt(totalHits)} 次访问`
-        : `${dailyRows.length} days · ${fmtInt(totalHits)} total hits`;
+        ? `${dailyRows.length} 天 · 累计 ${fmtInt(totalHits)} 次访问 · ${fmtInt(eventCount)} 条路径事件`
+        : `${dailyRows.length} days · ${fmtInt(totalHits)} total hits · ${fmtInt(eventCount)} path events`;
   } else {
     els.keyFileMeta.textContent = state.lang === "zh" ? "无关键文件访问记录" : "No key-file access records";
   }
@@ -769,6 +877,8 @@ function renderKeyFiles(data) {
     nameB: state.lang === "zh" ? "规范文件" : "Doc Hits",
     colorA: "#8b9f92",
     colorB: "#b58f7f",
+    axisAFormatter: (value) => compactAxisValue(value),
+    axisBFormatter: (value) => compactAxisValue(value),
   });
 
   const rows = [
@@ -777,8 +887,8 @@ function renderKeyFiles(data) {
       title: state.lang === "zh" ? "统计口径" : "Counting Method",
       text:
         state.lang === "zh"
-          ? "按访问事件计数：从 tool_use/tool_result 的 path 解析 AGENT.md、TOOLS.md、SOUL.md、memory/* 命中。"
-          : "Event-based counting: parse AGENT.md, TOOLS.md, SOUL.md, memory/* from tool_use/tool_result paths.",
+          ? "按路径事件计数：解析 tool_use/tool_result/input/result 中的 path 字段，命中 AGENT.md、TOOLS.md、SOUL.md、memory/*。"
+          : "Path-event counting: parse path-like fields in tool_use/tool_result/input/result and match AGENT.md, TOOLS.md, SOUL.md, memory/*.",
     },
     {
       level: "warn",
@@ -791,62 +901,6 @@ function renderKeyFiles(data) {
   ];
   els.keyFileMethod.innerHTML = rows
     .map((row) => `<article class="alert ${row.level}"><strong>${esc(row.title)}</strong><div>${esc(row.text)}</div></article>`)
-    .join("");
-}
-
-function renderWeeklyBrief(data) {
-  const summary = data.summary || {};
-  const alerts = data.alerts || [];
-  const anomalies = data.anomalies || {};
-  const brief = [];
-  brief.push({
-    level: summary.requestFailureRatePct > 8 ? "warn" : "info",
-    title: state.lang === "zh" ? "系统负载" : "System Load",
-    text:
-      state.lang === "zh"
-        ? `请求 ${fmtInt(summary.totalRequests)}，总 tokens ${fmtTokens(summary.totalTokens)}，成本 ${fmtUsd(summary.totalCost)}。`
-        : `Requests ${fmtInt(summary.totalRequests)}, total tokens ${fmtTokens(summary.totalTokens)}, cost ${fmtUsd(summary.totalCost)}.`,
-  });
-  brief.push({
-    level: summary.p95LatencyMs > 6000 ? "warn" : "info",
-    title: state.lang === "zh" ? "响应延迟" : "Latency",
-    text:
-      state.lang === "zh"
-        ? `平均 ${fmtMs(summary.avgLatencyMs)}，P95 ${fmtMs(summary.p95LatencyMs)}。`
-        : `Avg ${fmtMs(summary.avgLatencyMs)}, P95 ${fmtMs(summary.p95LatencyMs)}.`,
-  });
-  brief.push({
-    level: summary.qmdBackedRatePct < 40 ? "warn" : "info",
-    title: state.lang === "zh" ? "QMD 覆盖率" : "QMD Coverage",
-    text:
-      state.lang === "zh"
-        ? `回源占比 ${fmtPct(summary.qmdBackedRatePct)}，向量检索 ${fmtInt(summary.vectorSearches)} 次。`
-        : `Backed rate ${fmtPct(summary.qmdBackedRatePct)} across ${fmtInt(summary.vectorSearches)} vector searches.`,
-  });
-  if (anomalies?.requestFailureSpikes?.length) {
-    brief.push({
-      level: "bad",
-      title: state.lang === "zh" ? "异常告警" : "Anomaly Alert",
-      text:
-        state.lang === "zh"
-          ? `检测到 ${fmtInt(anomalies.requestFailureSpikes.length)} 次失败率尖峰，建议优先排查。`
-          : `${fmtInt(anomalies.requestFailureSpikes.length)} failure spikes detected; prioritize investigation.`,
-    });
-  } else if (alerts.length) {
-    brief.push({
-      level: "warn",
-      title: state.lang === "zh" ? "风险提示" : "Risk Signals",
-      text: alerts
-        .slice(0, 1)
-        .map((item) => item.title)
-        .join(" · "),
-    });
-  }
-
-  els.weeklyMeta.textContent = state.lang === "zh" ? "自动生成 · 每次刷新更新" : "Auto-generated · updates on each refresh";
-  els.weeklyBrief.innerHTML = brief
-    .slice(0, 5)
-    .map((item) => `<article class="brief-item ${esc(item.level)}"><strong>${esc(item.title)}</strong><div>${esc(item.text)}</div></article>`)
     .join("");
 }
 
@@ -1001,6 +1055,46 @@ function renderSessions(data) {
   });
 }
 
+async function openMemoryFile(relativePath) {
+  if (!relativePath) {
+    return;
+  }
+  if (state.memoryDetailPath === relativePath) {
+    state.memoryDetailPath = null;
+    state.memoryDetailLoadingPath = null;
+    state.memoryDetailError = "";
+    if (state.data) {
+      renderMemory(state.data);
+    }
+    return;
+  }
+  state.memoryDetailPath = relativePath;
+  state.memoryDetailLoadingPath = relativePath;
+  state.memoryDetailError = "";
+  if (state.data) {
+    renderMemory(state.data);
+  }
+  try {
+    if (!state.memoryDetailCache.has(relativePath)) {
+      const res = await fetch(`/api/memory-file?path=${encodeURIComponent(relativePath)}`, {
+        cache: "no-store",
+      });
+      const payload = await res.json();
+      if (!payload.ok || !payload.file) {
+        throw new Error(payload.error || "memory file request failed");
+      }
+      state.memoryDetailCache.set(relativePath, payload.file);
+    }
+  } catch (error) {
+    state.memoryDetailError = error instanceof Error ? error.message : String(error);
+  } finally {
+    state.memoryDetailLoadingPath = null;
+    if (state.data) {
+      renderMemory(state.data);
+    }
+  }
+}
+
 function renderMemory(data) {
   const memory = data.memory;
   els.memoryMeta.textContent = memory.exists
@@ -1039,18 +1133,46 @@ function renderMemory(data) {
       ? `展示 ${fmtInt(filtered.length)} / ${fmtInt(files.length)}（总文件 ${fmtInt(memory.fileCount)}）`
       : `showing ${fmtInt(filtered.length)} / ${fmtInt(files.length)} (total ${fmtInt(memory.fileCount)})`;
 
-  els.memoryFiles.innerHTML = filtered
-    .map(
-      (file) => `
-        <article class="memory-file">
-          <div class="name">${esc(file.title)}</div>
-          <div class="path">${esc(file.relativePath)}</div>
-          <div class="muted">${esc(fmtBytes(file.size))} · ${esc(fmtDate(file.mtimeMs))}</div>
-          <div>${esc(file.snippet || "")}</div>
-        </article>
-      `,
-    )
-    .join("") || `<div class="muted">${state.lang === "zh" ? "未发现匹配记忆文件。" : "No matching memory files."}</div>`;
+  els.memoryFiles.innerHTML =
+    filtered
+      .map((file) => {
+        const isOpen = state.memoryDetailPath === file.relativePath;
+        const cached = state.memoryDetailCache.get(file.relativePath);
+        const loading = state.memoryDetailLoadingPath === file.relativePath;
+        const detail = isOpen
+          ? loading
+            ? `<div class="muted">${state.lang === "zh" ? "加载全文中..." : "Loading full file..."}</div>`
+            : state.memoryDetailError
+              ? `<div class="muted">${esc(state.memoryDetailError)}</div>`
+              : cached
+                ? `<pre class="memory-full">${esc(cached.content || "")}</pre>
+                <div class="muted">${cached.truncated ? (state.lang === "zh" ? "已截断（最大 200,000 字符）" : "truncated (max 200,000 chars)") : ""}</div>`
+                : `<div class="muted">${state.lang === "zh" ? "无详细内容" : "No details available"}</div>`
+          : "";
+        return `
+          <article class="memory-file">
+            <div class="name">${esc(file.title)}</div>
+            <div class="path">${esc(file.relativePath)}</div>
+            <div class="muted">${esc(fmtBytes(file.size))} · ${esc(fmtDate(file.mtimeMs))}</div>
+            <div>${esc(file.snippet || "")}</div>
+            <button class="cmd-btn" type="button" data-memory-open="${esc(file.relativePath)}">
+              ${isOpen ? (state.lang === "zh" ? "收起全文" : "Hide Full Content") : state.lang === "zh" ? "查看全文" : "View Full Content"}
+            </button>
+            ${detail}
+          </article>
+        `;
+      })
+      .join("") || `<div class="muted">${state.lang === "zh" ? "未发现匹配记忆文件。" : "No matching memory files."}</div>`;
+
+  els.memoryFiles.querySelectorAll("[data-memory-open]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const targetPath = button.getAttribute("data-memory-open");
+      if (!targetPath) {
+        return;
+      }
+      void openMemoryFile(targetPath);
+    });
+  });
 }
 
 function renderAnomalies(data) {
@@ -1217,14 +1339,11 @@ function updateFiltersFromData(data) {
 
 function renderAll(data) {
   renderCards(data);
-  renderStoryline(data);
-  renderWeeklyBrief(data);
   renderTrend(data);
   renderRequestTrend(data);
   renderRequestHealth(data);
   renderLatency(data);
   renderVector(data);
-  renderCostMethod(data);
   renderRankings(data);
   renderRequestBreakdowns(data);
   renderKeyFiles(data);
@@ -1256,7 +1375,7 @@ async function fetchData() {
       params.set("channel", els.channel.value);
     }
     params.set("sessionLimit", "300");
-    params.set("memoryLimit", "50000");
+    params.set("memoryLimit", "0");
     params.set("timelineLimit", "320");
 
     const res = await fetch(`/api/collect?${params.toString()}`, { cache: "no-store" });

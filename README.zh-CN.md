@@ -14,13 +14,12 @@ OpenClaw Observatory 是一个面向 OpenClaw 的独立可观测性工具集。
 - 请求监控（类 Copilot 请求视角）
   - 总请求、可计费请求、高级请求
   - 成功/失败/超时/取消拆分
-  - `unknown` 来源细分（子代理、定时任务、直接 API/CLI、历史遗留、未分类）
+  - `unknown` 来源细分（子代理、定时任务、直接 API/CLI、网关未打标、元数据不完整/缺失、历史遗留）
 - Token、成本与延迟监控
   - 按日趋势
   - 尾延迟（p95）
   - 模型、Provider、工具分布
   - 按模型差异化计费估算（元数据优先，定价映射回退）
-  - 成本来源可解释（元数据占比 vs 估算占比）
 - QMD/向量检索监控
   - `memory_search` 与向量检索调用量、错误率
   - QMD-backed 检索占比
@@ -33,12 +32,12 @@ OpenClaw Observatory 是一个面向 OpenClaw 的独立可观测性工具集。
 - 双语 Dashboard
   - 支持中英文切换（zh-CN / en）
   - 首行筛选条冻结
-  - 图表可交互（tooltip、缩放、点击聚焦）
+  - 图表可交互（tooltip、缩放、拖拽查看）
 - 关键文件访问监控
   - `AGENT.md`、`TOOLS.md`、`SOUL.md`、`Memory` 的每日访问趋势
   - 统计方法与置信度说明
 - Telegram/Discord 命令摘要输出
-  - `summary`、`quota`、`qmd`、`alerts`、`daily`、`weekly`
+  - `summary`、`qmd`、`alerts`、`daily`、`weekly`
 
 ## 架构说明
 
@@ -133,6 +132,7 @@ node bot-command.mjs --cmd summary --days 7
 - `GET /api/health`：健康检查
 - `GET /api/collect`：完整指标 JSON
 - `GET /api/command`：命令摘要（JSON）
+- `GET /api/memory-file`：按路径读取记忆文件全文
 - `GET /command.txt`：命令摘要（纯文本，适合机器人直转发）
 
 ### 命令 API 示例

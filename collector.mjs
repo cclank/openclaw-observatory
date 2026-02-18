@@ -157,7 +157,11 @@ const UNKNOWN_SOURCE_LABELS = {
   sub_agent: { en: "Sub-agent Chain", zh: "子代理链路" },
   scheduled_task: { en: "Scheduled Task", zh: "定时任务" },
   direct_api_cli: { en: "Direct API/CLI", zh: "直接 API/CLI 调用" },
+  gateway_unlabeled: { en: "Gateway Unlabeled", zh: "网关来源未打标" },
+  local_manual: { en: "Local Manual Session", zh: "本地手动会话" },
+  metadata_partial: { en: "Metadata Partial", zh: "元数据不完整" },
   legacy_or_migrated: { en: "Legacy/Migrated", zh: "历史遗留/迁移会话" },
+  metadata_missing: { en: "Metadata Missing", zh: "元数据缺失" },
   uncategorized: { en: "Uncategorized", zh: "未分类" },
 };
 const SUB_AGENT_HINTS = [
@@ -191,6 +195,8 @@ const DIRECT_HINTS = [
   "rpc",
   "sdk",
 ];
+const LOCAL_HINTS = ["local", "localhost", "127.0.0.1", "loopback", "menubar", "desktop", "mac app"];
+const CHANNEL_HINTS = ["telegram", "discord", "slack", "signal", "whatsapp", "imessage", "web"];
 const LEGACY_DAYS_THRESHOLD = 90;
 
 function parseArgs(argv) {
@@ -336,7 +342,26 @@ function guessUnknownSourceType(session) {
   const originProvider = normalizeText(session?.origin?.provider);
   const originSource = normalizeText(session?.origin?.source);
   const originType = normalizeText(session?.origin?.type);
-  const text = [chatType, trigger, mode, originProvider, originSource, originType]
+  const label = normalizeText(session?.label);
+  const sessionId = normalizeText(session?.sessionId);
+  const previewText = Array.isArray(session?.preview)
+    ? session.preview
+        .map((row) => normalizeText(row?.text))
+        .filter(Boolean)
+        .slice(0, 4)
+        .join(" ")
+    : "";
+  const text = [
+    chatType,
+    trigger,
+    mode,
+    originProvider,
+    originSource,
+    originType,
+    label,
+    sessionId,
+    previewText,
+  ]
     .filter(Boolean)
     .join(" ");
 
@@ -344,18 +369,45 @@ function guessUnknownSourceType(session) {
     (typeof session?.parentSessionId === "string" && session.parentSessionId.trim()) ||
     (typeof session?.origin?.parentSessionId === "string" && session.origin.parentSessionId.trim());
   if (hasParent || includesAnyHint(text, SUB_AGENT_HINTS) || hasSubAgentToolUsage(session?.toolUsage)) {
-    return "sub_agent";
+    return { type: "sub_agent", reason: "parent session or spawn-like markers" };
   }
   if (includesAnyHint(text, SCHEDULE_HINTS)) {
-    return "scheduled_task";
+    return { type: "scheduled_task", reason: "schedule-like markers in metadata/text" };
   }
   if (includesAnyHint(text, DIRECT_HINTS)) {
-    return "direct_api_cli";
+    return { type: "direct_api_cli", reason: "api/cli markers in metadata/text" };
+  }
+  if (includesAnyHint(text, CHANNEL_HINTS) || chatType) {
+    return { type: "gateway_unlabeled", reason: "channel-like metadata present but channel field missing" };
+  }
+  if (includesAnyHint(text, LOCAL_HINTS) || mode === "local") {
+    return { type: "local_manual", reason: "local runtime markers" };
   }
   if (updatedAt && now - updatedAt > LEGACY_DAYS_THRESHOLD * DAY_MS) {
-    return "legacy_or_migrated";
+    return { type: "legacy_or_migrated", reason: `updated > ${LEGACY_DAYS_THRESHOLD} days ago` };
   }
-  return "uncategorized";
+  const metadataValues = {
+    chatType,
+    trigger,
+    mode,
+    originProvider,
+    originSource,
+    originType,
+    label,
+  };
+  const metadataSignals = Object.values(metadataValues).filter(Boolean).length;
+  if (metadataSignals === 0) {
+    return { type: "metadata_missing", reason: "channel and routing metadata unavailable" };
+  }
+  const detail = Object.entries(metadataValues)
+    .filter(([, value]) => Boolean(value))
+    .map(([key, value]) => `${key}=${value}`)
+    .slice(0, 4)
+    .join(", ");
+  return {
+    type: "metadata_partial",
+    reason: detail ? `metadata exists but no classifier match (${detail})` : "metadata exists but no classifier match",
+  };
 }
 
 function createUnknownBreakdownRow(type) {
@@ -402,9 +454,12 @@ function collectKeyFileHits(text) {
     return counts;
   }
   for (const item of KEY_FILE_DEFINITIONS) {
-    const matched = item.patterns.some((pattern) => countMatches(text, pattern) > 0);
-    if (matched) {
-      counts[item.key] += 1;
+    let hitCount = 0;
+    for (const pattern of item.patterns) {
+      hitCount += countMatches(text, pattern);
+    }
+    if (hitCount > 0) {
+      counts[item.key] += hitCount;
     }
   }
   return counts;
@@ -421,6 +476,65 @@ function addKeyFileHitsToDailyMap(dailyMap, dayKey, counts) {
   const current = dailyMap.get(dayKey) ?? emptyKeyFileCounts();
   mergeKeyFileCounts(current, counts);
   dailyMap.set(dayKey, current);
+}
+
+const PATH_FIELD_NAMES = new Set([
+  "path",
+  "paths",
+  "file",
+  "filePath",
+  "filepath",
+  "relativePath",
+  "target",
+  "uri",
+  "url",
+]);
+
+function pushPathCandidate(out, value) {
+  if (typeof value !== "string") {
+    return;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > 320) {
+    return;
+  }
+  out.push(trimmed);
+}
+
+function collectPathCandidates(value, out, depth = 0) {
+  if (depth > 4 || value === null || value === undefined) {
+    return;
+  }
+  if (typeof value === "string") {
+    pushPathCandidate(out, value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const row of value.slice(0, 40)) {
+      collectPathCandidates(row, out, depth + 1);
+    }
+    return;
+  }
+  const record = asRecord(value);
+  if (!record) {
+    return;
+  }
+  for (const [key, row] of Object.entries(record)) {
+    const lowered = key.toLowerCase();
+    if (PATH_FIELD_NAMES.has(key) || lowered.includes("path") || lowered.includes("file")) {
+      collectPathCandidates(row, out, depth + 1);
+      continue;
+    }
+    if (depth < 2 && (lowered === "input" || lowered === "args" || lowered === "result")) {
+      collectPathCandidates(row, out, depth + 1);
+    }
+  }
+}
+
+function extractPathCandidates(value) {
+  const out = [];
+  collectPathCandidates(value, out);
+  return Array.from(new Set(out));
 }
 
 function asRecord(value) {
@@ -859,14 +973,6 @@ function mergeRequestCounts(target, source) {
   target.withoutCost += source.withoutCost;
 }
 
-function asPositiveInt(value) {
-  const n = Number(value);
-  if (!Number.isFinite(n) || n <= 0) {
-    return null;
-  }
-  return Math.floor(n);
-}
-
 function makeRequestModelKey(provider, model) {
   return `${provider ?? "unknown"}::${model ?? "unknown"}`;
 }
@@ -971,8 +1077,21 @@ function createVectorStats() {
     topPathMap: new Map(),
     topCollectionMap: new Map(),
     providerModelMap: new Map(),
+    topErrorMap: new Map(),
+    errorSamples: [],
     latencyValues: [],
   };
+}
+
+function normalizeErrorLabel(value) {
+  if (typeof value !== "string") {
+    return "unknown_error";
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "unknown_error";
+  }
+  return trimmed.length > 160 ? `${trimmed.slice(0, 157)}...` : trimmed;
 }
 
 function mergeTotals(target, source) {
@@ -1161,6 +1280,7 @@ async function parseSessionFile(params) {
   const activityDates = new Set();
   const keyFileTotals = emptyKeyFileCounts();
   const keyFileDailyMap = new Map();
+  let keyFileEventCount = 0;
 
   let firstActivity;
   let lastActivity;
@@ -1198,8 +1318,8 @@ async function parseSessionFile(params) {
     const timestampMs = parseTimestampMs(record, message);
 
     const inRange =
-      timestampMs === undefined ||
-      (timestampMs >= range.startMs && timestampMs <= range.endMs);
+      (timestampMs === undefined && !Number.isFinite(range.startMs)) ||
+      (timestampMs !== undefined && timestampMs >= range.startMs && timestampMs <= range.endMs);
     if (!inRange) {
       continue;
     }
@@ -1264,19 +1384,22 @@ async function parseSessionFile(params) {
       if (!useName) {
         continue;
       }
-      const usePath = typeof use.input?.path === "string" ? use.input.path.trim() : "";
+      const usePaths = extractPathCandidates(use.input);
+      const usePath = usePaths[0] ?? "";
       if (use.id) {
         pendingToolCalls.set(use.id, {
           name: useName,
           query: typeof use.input?.query === "string" ? use.input.query.trim() : null,
           path: usePath || null,
+          paths: usePaths,
         });
       }
-      if (usePath) {
-        const pathHits = collectKeyFileHits(usePath);
+      for (const candidatePath of usePaths) {
+        const pathHits = collectKeyFileHits(candidatePath);
         if (hasKeyFileHits(pathHits)) {
           mergeKeyFileCounts(keyFileTotals, pathHits);
           addKeyFileHitsToDailyMap(keyFileDailyMap, dayKey, pathHits);
+          keyFileEventCount += 1;
         }
       }
 
@@ -1483,9 +1606,35 @@ async function parseSessionFile(params) {
           : [];
         const disabled = payloadRecord?.disabled === true;
         const hasError = resultBlock.isError || Boolean(payloadError) || disabled;
+        const errorLabel =
+          hasError
+            ? normalizeErrorLabel(
+                payloadError ??
+                  (disabled ? "disabled" : null) ??
+                  (resultBlock.isError ? "tool_result_error" : null) ??
+                  "unknown_error",
+              )
+            : null;
 
         if (hasError) {
           vectorStats.searchErrors += 1;
+          if (errorLabel) {
+            vectorStats.topErrorMap.set(
+              errorLabel,
+              (vectorStats.topErrorMap.get(errorLabel) ?? 0) + 1,
+            );
+            if (vectorStats.errorSamples.length < 80) {
+              vectorStats.errorSamples.push({
+                error: errorLabel,
+                tool: resolvedToolName,
+                query: pending?.query ?? null,
+                path: pending?.path ?? null,
+                date: dayKey,
+                sessionId,
+                timestamp: timestampMs ?? null,
+              });
+            }
+          }
           if (dayBucket) {
             dayBucket.vectorSearchErrors += 1;
           }
@@ -1556,27 +1705,31 @@ async function parseSessionFile(params) {
       }
 
       if (isMemoryGetToolName(resolvedToolName)) {
-        const pendingPath = typeof pending?.path === "string" ? pending.path.trim() : "";
-        let pathCandidate = null;
         const payload = parseJsonLoose(resultBlock.text);
         const payloadRecord = asRecord(payload);
-        if (typeof payloadRecord?.path === "string" && payloadRecord.path.trim()) {
-          pathCandidate = payloadRecord.path.trim();
-        } else if (pendingPath) {
-          pathCandidate = pendingPath;
-        }
-        if (pathCandidate) {
+        const pendingPath = typeof pending?.path === "string" ? pending.path.trim() : "";
+        const mergedPaths = new Set([
+          ...extractPathCandidates(payloadRecord),
+          ...(Array.isArray(pending?.paths) ? pending.paths : []),
+          ...(pendingPath ? [pendingPath] : []),
+        ]);
+
+        for (const pathCandidate of mergedPaths) {
           const sameAsPending =
             pendingPath && pathCandidate.toLowerCase() === pendingPath.toLowerCase();
-          if (!sameAsPending) {
-            const pathHits = collectKeyFileHits(pathCandidate);
-            if (hasKeyFileHits(pathHits)) {
-              mergeKeyFileCounts(keyFileTotals, pathHits);
-              addKeyFileHitsToDailyMap(keyFileDailyMap, dayKey, pathHits);
-            }
+          if (sameAsPending) {
+            continue;
+          }
+          const pathHits = collectKeyFileHits(pathCandidate);
+          if (hasKeyFileHits(pathHits)) {
+            mergeKeyFileCounts(keyFileTotals, pathHits);
+            addKeyFileHitsToDailyMap(keyFileDailyMap, dayKey, pathHits);
+            keyFileEventCount += 1;
           }
         }
-        if (!pendingPath && pathCandidate && pathCandidate.toLowerCase().startsWith("qmd/")) {
+
+        const qmdPath = pendingPath || Array.from(mergedPaths)[0] || "";
+        if (!pendingPath && qmdPath && qmdPath.toLowerCase().startsWith("qmd/")) {
           vectorStats.qmdMemoryGetCalls += 1;
           if (dayBucket) {
             dayBucket.qmdMemoryGetCalls += 1;
@@ -1792,6 +1945,11 @@ async function parseSessionFile(params) {
       providerModel: item.key,
       count: item.count,
     })),
+    topErrors: mapTopEntries(vectorStats.topErrorMap, 16).map((item) => ({
+      error: item.key,
+      count: item.count,
+    })),
+    errorSamples: vectorStats.errorSamples.slice(0, 80),
   };
   const latency = computeLatencyStats(latencyValues);
   const sortedTimeline = timeline.sort((a, b) => a.timestamp - b.timestamp);
@@ -1903,6 +2061,7 @@ async function parseSessionFile(params) {
       totals: keyFilesTotals,
       daily: keyFilesDaily,
       totalHits: keyFilesTotals.reduce((sum, item) => sum + item.count, 0),
+      eventCount: keyFileEventCount,
     },
   };
 }
@@ -2040,6 +2199,10 @@ async function collectMemoryStats({ workspaceDir, memoryLimit = 80 }) {
   }
 
   fileRows.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  const limit =
+    typeof memoryLimit === "number" && Number.isFinite(memoryLimit) && memoryLimit > 0
+      ? Math.floor(memoryLimit)
+      : fileRows.length;
 
   return {
     workspaceDir,
@@ -2050,7 +2213,7 @@ async function collectMemoryStats({ workspaceDir, memoryLimit = 80 }) {
     newestMs,
     oldestMs,
     byDay: Array.from(byDayMap.values()).sort((a, b) => a.date.localeCompare(b.date)),
-    files: fileRows.slice(0, Math.max(10, memoryLimit)),
+    files: fileRows.slice(0, Math.max(1, limit)),
     keywords: Array.from(keywordMap.entries())
       .map(([word, count]) => ({ word, count }))
       .sort((a, b) => b.count - a.count)
@@ -2198,7 +2361,7 @@ function buildAnomalies({ daily, sessions, latency, requests, vector }) {
   };
 }
 
-function buildAlerts({ totals, messages, requests, vector, sessions, memory, anomalies, quota }) {
+function buildAlerts({ totals, messages, requests, vector, sessions, memory, anomalies }) {
   const alerts = [];
 
   const errorRate = messages.total > 0 ? (messages.errors / messages.total) * 100 : 0;
@@ -2240,22 +2403,6 @@ function buildAlerts({ totals, messages, requests, vector, sessions, memory, ano
       level: "info",
       title: "Low QMD Coverage",
       message: `Only ${(vector.qmdBackedRatePct ?? 0).toFixed(1)}% of vector searches were QMD-backed.`,
-    });
-  }
-
-  if (quota?.totalLimit && quota.totalUsagePct >= 90) {
-    alerts.push({
-      level: "warn",
-      title: "Request Quota Near Limit",
-      message: `Request quota usage ${(quota.totalUsagePct ?? 0).toFixed(1)}% (${quota.totalUsed}/${quota.totalLimit}).`,
-    });
-  }
-
-  if (quota?.premiumLimit && quota.premiumUsagePct >= 90) {
-    alerts.push({
-      level: "warn",
-      title: "Premium Quota Near Limit",
-      message: `Premium quota usage ${(quota.premiumUsagePct ?? 0).toFixed(1)}% (${quota.premiumUsed}/${quota.premiumLimit}).`,
     });
   }
 
@@ -2358,6 +2505,7 @@ function aggregateSessions({ sessions, filter }) {
   const vector = createVectorStats();
 
   const toolsMap = new Map();
+  const toolDetailMap = new Map();
   const byModelMap = new Map();
   const byProviderMap = new Map();
   const byAgentMap = new Map();
@@ -2367,9 +2515,11 @@ function aggregateSessions({ sessions, filter }) {
   const byRequestAgentMap = new Map();
   const byRequestChannelMap = new Map();
   const unknownChannelBreakdownMap = new Map();
+  const unknownChannelSamples = [];
   const dailyMap = new Map();
   const keyFileDailyMap = new Map();
   const keyFileTotals = emptyKeyFileCounts();
+  let keyFileEventCount = 0;
   const contextRows = [];
 
   const latency = {
@@ -2425,6 +2575,17 @@ function aggregateSessions({ sessions, filter }) {
         (vector.providerModelMap.get(item.providerModel) ?? 0) + item.count,
       );
     }
+    for (const item of session.vector?.topErrors ?? []) {
+      vector.topErrorMap.set(item.error, (vector.topErrorMap.get(item.error) ?? 0) + item.count);
+    }
+    if (Array.isArray(session.vector?.errorSamples)) {
+      for (const sample of session.vector.errorSamples) {
+        if (vector.errorSamples.length >= 200) {
+          break;
+        }
+        vector.errorSamples.push(sample);
+      }
+    }
     if (session.vector?.latency?.count) {
       vectorLatency.count += session.vector.latency.count;
       vectorLatency.sum += session.vector.latency.avgMs * session.vector.latency.count;
@@ -2443,6 +2604,41 @@ function aggregateSessions({ sessions, filter }) {
 
     for (const tool of session.toolUsage.tools) {
       toolsMap.set(tool.name, (toolsMap.get(tool.name) ?? 0) + tool.count);
+      const detail =
+        toolDetailMap.get(tool.name) ??
+        {
+          name: tool.name,
+          totalCalls: 0,
+          sessions: 0,
+          byAgentMap: new Map(),
+          byChannelMap: new Map(),
+          topSessions: [],
+        };
+      detail.totalCalls += tool.count;
+      detail.sessions += 1;
+      detail.byAgentMap.set(
+        session.agentId,
+        (detail.byAgentMap.get(session.agentId) ?? 0) + tool.count,
+      );
+      const channelKey = session.channel ?? "unknown";
+      detail.byChannelMap.set(
+        channelKey,
+        (detail.byChannelMap.get(channelKey) ?? 0) + tool.count,
+      );
+      detail.topSessions.push({
+        id: session.id,
+        sessionId: session.sessionId,
+        label: session.label ?? null,
+        agentId: session.agentId,
+        channel: channelKey,
+        count: tool.count,
+        updatedAt: session.updatedAt ?? null,
+      });
+      if (detail.topSessions.length > 40) {
+        detail.topSessions.sort((a, b) => b.count - a.count || (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+        detail.topSessions.length = 40;
+      }
+      toolDetailMap.set(tool.name, detail);
     }
 
     for (const model of session.modelUsage) {
@@ -2513,7 +2709,8 @@ function aggregateSessions({ sessions, filter }) {
     });
     byRequestChannelMap.set(channelKey, requestChannelRow);
     if (!session.channel) {
-      const type = guessUnknownSourceType(session);
+      const inferred = guessUnknownSourceType(session);
+      const type = inferred.type;
       const unknownRow =
         unknownChannelBreakdownMap.get(type) ?? createUnknownBreakdownRow(type);
       unknownRow.sessions += 1;
@@ -2522,6 +2719,20 @@ function aggregateSessions({ sessions, filter }) {
       unknownRow.premium += session.requestCounts?.premium ?? 0;
       unknownRow.failed += session.requestCounts?.failed ?? 0;
       unknownChannelBreakdownMap.set(type, unknownRow);
+      if (unknownChannelSamples.length < 120) {
+        const labels = UNKNOWN_SOURCE_LABELS[type] ?? UNKNOWN_SOURCE_LABELS.uncategorized;
+        unknownChannelSamples.push({
+          type,
+          typeLabel: labels.en,
+          typeLabelZh: labels.zh,
+          reason: inferred.reason,
+          agentId: session.agentId,
+          sessionId: session.sessionId,
+          label: session.label ?? null,
+          updatedAt: session.updatedAt ?? null,
+          requests: session.requestCounts?.total ?? 0,
+        });
+      }
     }
 
     for (const requestRow of session.requestUsage ?? []) {
@@ -2616,6 +2827,7 @@ function aggregateSessions({ sessions, filter }) {
       }
       keyFileTotals[item.key] = (keyFileTotals[item.key] ?? 0) + (item.count ?? 0);
     }
+    keyFileEventCount += session.keyFiles?.eventCount ?? 0;
 
     if (session.contextWeight?.systemPrompt?.chars) {
       contextRows.push({
@@ -2730,6 +2942,11 @@ function aggregateSessions({ sessions, filter }) {
       providerModel: item.key,
       count: item.count,
     })),
+    topErrors: mapTopEntries(vector.topErrorMap, 16).map((item) => ({
+      error: item.key,
+      count: item.count,
+    })),
+    errorSamples: vector.errorSamples.slice(0, 200),
   };
 
   const sortRequestRows = (a, b) =>
@@ -2757,6 +2974,7 @@ function aggregateSessions({ sessions, filter }) {
       totals: keyFilesTotals,
       daily: keyFilesDaily,
       totalHits: keyFilesTotals.reduce((sum, item) => sum + item.count, 0),
+      eventCount: keyFileEventCount,
     },
     latency: latencyStats,
     aggregates: {
@@ -2764,6 +2982,24 @@ function aggregateSessions({ sessions, filter }) {
       tools: Array.from(toolsMap.entries())
         .map(([name, count]) => ({ name, count }))
         .sort((a, b) => b.count - a.count),
+      toolDrilldown: Array.from(toolDetailMap.values())
+        .map((item) => ({
+          name: item.name,
+          totalCalls: item.totalCalls,
+          sessions: item.sessions,
+          byAgent: mapTopEntries(item.byAgentMap, 20).map((row) => ({
+            agentId: row.key,
+            count: row.count,
+          })),
+          byChannel: mapTopEntries(item.byChannelMap, 20).map((row) => ({
+            channel: row.key,
+            count: row.count,
+          })),
+          topSessions: [...item.topSessions]
+            .sort((a, b) => b.count - a.count || (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
+            .slice(0, 20),
+        }))
+        .sort((a, b) => b.totalCalls - a.totalCalls || b.sessions - a.sessions),
       byModel: Array.from(byModelMap.values()).sort(sortByCostThenTokens),
       byProvider: Array.from(byProviderMap.values()).sort((a, b) =>
         sortByCostThenTokens(a, b),
@@ -2781,6 +3017,9 @@ function aggregateSessions({ sessions, filter }) {
       unknownChannelBreakdown: Array.from(unknownChannelBreakdownMap.values()).sort((a, b) =>
         b.total - a.total || b.sessions - a.sessions,
       ),
+      unknownChannelSamples: unknownChannelSamples
+        .sort((a, b) => b.requests - a.requests || (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
+        .slice(0, 40),
       context: contextRows.sort((a, b) => b.chars - a.chars),
     },
   };
@@ -2822,47 +3061,6 @@ function resolvePremiumPattern(inputPattern) {
   } catch {
     return null;
   }
-}
-
-function resolveQuotaLimits(options = {}) {
-  const totalLimit = asPositiveInt(options.requestQuota ?? process.env.OPENCLAW_REQUEST_QUOTA);
-  const premiumLimit = asPositiveInt(options.premiumQuota ?? process.env.OPENCLAW_PREMIUM_REQUEST_QUOTA);
-  return {
-    totalLimit,
-    premiumLimit,
-  };
-}
-
-function buildQuotaSummary({ limits, requests }) {
-  const totalUsed = requests?.billable ?? requests?.total ?? 0;
-  const premiumUsed = requests?.premium ?? 0;
-  const totalRemaining =
-    typeof limits.totalLimit === "number" ? Math.max(0, limits.totalLimit - totalUsed) : null;
-  const premiumRemaining =
-    typeof limits.premiumLimit === "number"
-      ? Math.max(0, limits.premiumLimit - premiumUsed)
-      : null;
-  const totalUsagePct =
-    typeof limits.totalLimit === "number" && limits.totalLimit > 0
-      ? (totalUsed / limits.totalLimit) * 100
-      : null;
-  const premiumUsagePct =
-    typeof limits.premiumLimit === "number" && limits.premiumLimit > 0
-      ? (premiumUsed / limits.premiumLimit) * 100
-      : null;
-  return {
-    ...limits,
-    totalUsed,
-    premiumUsed,
-    totalRemaining,
-    premiumRemaining,
-    totalUsagePct,
-    premiumUsagePct,
-    totalExceeded:
-      typeof limits.totalLimit === "number" ? totalUsed > limits.totalLimit : false,
-    premiumExceeded:
-      typeof limits.premiumLimit === "number" ? premiumUsed > limits.premiumLimit : false,
-  };
 }
 
 async function listAgents(stateDir) {
@@ -2988,11 +3186,6 @@ export async function collectOpenClawMetrics(options = {}) {
     vector: aggregated.vector,
   });
 
-  const quota = buildQuotaSummary({
-    limits: resolveQuotaLimits(options),
-    requests: aggregated.requests,
-  });
-
   const alerts = buildAlerts({
     totals: aggregated.totals,
     messages: aggregated.messages,
@@ -3001,7 +3194,6 @@ export async function collectOpenClawMetrics(options = {}) {
     sessions: aggregated.filtered,
     memory,
     anomalies,
-    quota,
   });
 
   return {
@@ -3048,6 +3240,7 @@ export async function collectOpenClawMetrics(options = {}) {
       avgLatencyMs: aggregated.latency?.avgMs ?? null,
       p95LatencyMs: aggregated.latency?.p95Ms ?? null,
       keyFileAccessHits: aggregated.keyFiles?.totalHits ?? 0,
+      keyFileAccessEvents: aggregated.keyFiles?.eventCount ?? 0,
     },
     totals: aggregated.totals,
     cost: {
@@ -3071,7 +3264,6 @@ export async function collectOpenClawMetrics(options = {}) {
     requests: aggregated.requests,
     vector: aggregated.vector,
     keyFiles: aggregated.keyFiles,
-    quota,
     latency: aggregated.latency,
     aggregates: aggregated.aggregates,
     sessions: topSessions,
@@ -3140,8 +3332,6 @@ export function buildCommandText(payload, options = {}) {
   const summary = payload?.summary ?? {};
   const requests = payload?.requests ?? {};
   const vector = payload?.vector ?? {};
-  const quota = payload?.quota ?? {};
-  const cost = payload?.cost ?? {};
   const unknownBreakdown = Array.isArray(payload?.aggregates?.unknownChannelBreakdown)
     ? payload.aggregates.unknownChannelBreakdown
     : [];
@@ -3149,17 +3339,6 @@ export function buildCommandText(payload, options = {}) {
     typeof payload?.generatedAt === "number"
       ? new Date(payload.generatedAt).toLocaleString(locale)
       : "-";
-
-  if (command === "quota") {
-    const lines = [
-      `${L("OpenClaw 配额", "OpenClaw Quota")} (${range}d)`,
-      `${L("请求", "Requests")}: ${compactInt(quota.totalUsed)} / ${quota.totalLimit ?? L("不限", "unlimited")} (${compactPct(quota.totalUsagePct ?? 0)})`,
-      `${L("高级", "Premium")}: ${compactInt(quota.premiumUsed)} / ${quota.premiumLimit ?? L("不限", "unlimited")} (${compactPct(quota.premiumUsagePct ?? 0)})`,
-      `${L("剩余", "Remaining")}: ${L("总量", "total")} ${quota.totalRemaining ?? "∞"} · ${L("高级", "premium")} ${quota.premiumRemaining ?? "∞"}`,
-      `${L("生成时间", "Generated")}: ${generatedAt}`,
-    ];
-    return lines.join("\n");
-  }
 
   if (command === "qmd") {
     const topCollections = (vector.topCollections ?? [])
@@ -3219,7 +3398,6 @@ export function buildCommandText(payload, options = {}) {
     const lines = [
       `${L("OpenClaw 智能周报", "OpenClaw Weekly Brief")} (${range}d)`,
       `${L("请求", "Requests")}: ${compactInt(weeklyRequests)} · ${L("Tokens", "Tokens")}: ${compactTokens(weeklyTokens)} · ${L("成本", "Cost")}: ${compactUsd(summary.totalCost)}`,
-      `${L("成本口径", "Cost basis")}: ${L("元数据", "metadata")} ${compactPct(cost.metadataSharePct ?? 0)} · ${L("估算", "estimated")} ${compactPct(cost.estimatedSharePct ?? 0)}`,
       `${L("延迟", "Latency")}: avg ${compactMs(summary.avgLatencyMs)} · p95 ${compactMs(summary.p95LatencyMs)} · ${L("失败率", "Request fail")} ${compactPct(summary.requestFailureRatePct)}`,
       `${L("QMD 覆盖率", "QMD coverage")}: ${compactPct(weeklyVector > 0 ? (weeklyQmdBacked / weeklyVector) * 100 : summary.qmdBackedRatePct)} (${compactInt(weeklyQmdBacked)}/${compactInt(weeklyVector)})`,
       `${L("关键文件访问", "Key files touched")}: ${compactInt(summary.keyFileAccessHits ?? 0)} (AGENT/TOOLS/SOUL/Memory)`,
@@ -3259,7 +3437,6 @@ export function buildCommandText(payload, options = {}) {
     `${L("OpenClaw 摘要", "OpenClaw Summary")} (${range}d)`,
     `${L("请求", "Requests")}: ${compactInt(summary.totalRequests)} (${L("计费", "billable")} ${compactInt(summary.billableRequests)} · ${L("高级", "premium")} ${compactInt(summary.premiumRequests)} · ${L("失败", "fail")} ${compactPct(summary.requestFailureRatePct)})`,
     `${L("Tokens", "Tokens")}: ${compactTokens(summary.totalTokens)} · ${L("成本", "Cost")} ${compactUsd(summary.totalCost)}`,
-    `${L("成本口径", "Cost basis")}: ${L("元数据", "metadata")} ${compactPct(cost.metadataSharePct ?? 0)} · ${L("估算", "estimated")} ${compactPct(cost.estimatedSharePct ?? 0)}`,
     `${L("延迟", "Latency")}: avg ${compactMs(summary.avgLatencyMs)} · p95 ${compactMs(summary.p95LatencyMs)}`,
     `Vector/QMD: ${compactInt(summary.vectorSearches)} searches · qmd ${compactPct(summary.qmdBackedRatePct)} · err ${compactPct(summary.vectorSearchErrorRatePct)}`,
     unknownBreakdown.length > 0
@@ -3292,8 +3469,6 @@ async function runCli() {
     sessionLimit: asNumber(args["session-limit"], 250),
     memoryLimit: asNumber(args["memory-limit"], 100),
     timelineLimit: asNumber(args["timeline-limit"], 240),
-    requestQuota: asNumber(args["request-quota"], NaN),
-    premiumQuota: asNumber(args["premium-quota"], NaN),
     premiumModelPattern:
       typeof args["premium-model-pattern"] === "string"
         ? args["premium-model-pattern"]

@@ -14,12 +14,11 @@ It provides dashboard analytics and bot-friendly command summaries for request u
 - Request analytics (Copilot-style usage perspective)
   - total, billable, premium requests
   - success/failure/timeout/cancelled breakdown
-  - `unknown` source breakdown (sub-agent, scheduled task, direct API/CLI, legacy, uncategorized)
+  - `unknown` source breakdown (sub-agent, scheduled task, direct API/CLI, gateway unlabeled, metadata partial/missing, legacy)
 - Token, cost, and latency observability
   - daily trends and tail latency (p95)
   - model/provider and tool distributions
   - model-aware cost estimation (metadata-first, pricing fallback)
-  - cost source explainability (metadata vs estimated share)
 - QMD/vector retrieval observability
   - `memory_search` and vector call volume/error rate
   - QMD-backed retrieval ratio
@@ -31,12 +30,12 @@ It provides dashboard analytics and bot-friendly command summaries for request u
 - Bilingual dashboard UI
   - zh-CN / en language toggle
   - sticky top filter bar
-  - interactive charts (tooltip, zoom, click-to-focus storyline)
+  - interactive charts (tooltip, zoom, drag/inspect)
 - Key-file access analytics
   - daily access counts for `AGENT.md`, `TOOLS.md`, `SOUL.md`, and `Memory`
   - method and confidence explanation panel
 - Chat-command output for Telegram/Discord
-  - `summary`, `quota`, `qmd`, `alerts`, `daily`, `weekly`
+  - `summary`, `qmd`, `alerts`, `daily`, `weekly`
 
 ## Architecture
 
@@ -131,6 +130,7 @@ node bot-command.mjs --cmd summary --days 7
 - `GET /api/health`: health check
 - `GET /api/collect`: full dashboard payload
 - `GET /api/command`: JSON command summary
+- `GET /api/memory-file`: fetch full content for a memory file
 - `GET /command.txt`: plain-text command summary (bot relay friendly)
 
 ### Command API Example

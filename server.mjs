@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import http from "node:http";
 import fsp from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildCommandText, collectOpenClawMetrics } from "./collector.mjs";
@@ -46,6 +47,26 @@ function mimeType(filePath) {
 function asNumber(value, fallback) {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
+}
+
+function resolveStateDir(inputStateDir) {
+  if (inputStateDir) {
+    return path.resolve(inputStateDir);
+  }
+  if (process.env.OPENCLAW_STATE_DIR) {
+    return path.resolve(process.env.OPENCLAW_STATE_DIR);
+  }
+  return path.join(os.homedir(), ".openclaw");
+}
+
+function resolveWorkspaceDir(inputWorkspaceDir, stateDir) {
+  if (inputWorkspaceDir) {
+    return path.resolve(inputWorkspaceDir);
+  }
+  if (process.env.OPENCLAW_WORKSPACE_DIR) {
+    return path.resolve(process.env.OPENCLAW_WORKSPACE_DIR);
+  }
+  return path.join(stateDir, "workspace");
 }
 
 function json(res, statusCode, payload) {
@@ -101,13 +122,15 @@ async function main() {
   const host = typeof args.host === "string" ? args.host : "127.0.0.1";
   const port = asNumber(args.port, 3188);
   const cache = createCollectorCache(asNumber(args["cache-ms"], 15_000));
+  const stateDir = resolveStateDir(typeof args["state-dir"] === "string" ? args["state-dir"] : undefined);
+  const workspaceDir = resolveWorkspaceDir(
+    typeof args["workspace-dir"] === "string" ? args["workspace-dir"] : undefined,
+    stateDir,
+  );
 
   const fixedOptions = {
-    stateDir: typeof args["state-dir"] === "string" ? args["state-dir"] : undefined,
-    workspaceDir:
-      typeof args["workspace-dir"] === "string" ? args["workspace-dir"] : undefined,
-    requestQuota: asNumber(args["request-quota"], NaN),
-    premiumQuota: asNumber(args["premium-quota"], NaN),
+    stateDir,
+    workspaceDir,
     premiumModelPattern:
       typeof args["premium-model-pattern"] === "string"
         ? args["premium-model-pattern"]
@@ -138,8 +161,6 @@ async function main() {
           sessionLimit: asNumber(query.sessionLimit, 250),
           memoryLimit: asNumber(query.memoryLimit, 100),
           timelineLimit: asNumber(query.timelineLimit, 240),
-          requestQuota: asNumber(query.requestQuota, fixedOptions.requestQuota),
-          premiumQuota: asNumber(query.premiumQuota, fixedOptions.premiumQuota),
           premiumModelPattern:
             typeof query.premiumModelPattern === "string" && query.premiumModelPattern
               ? query.premiumModelPattern
@@ -167,8 +188,6 @@ async function main() {
           sessionLimit: asNumber(query.sessionLimit, 250),
           memoryLimit: asNumber(query.memoryLimit, 100),
           timelineLimit: asNumber(query.timelineLimit, 240),
-          requestQuota: asNumber(query.requestQuota, fixedOptions.requestQuota),
-          premiumQuota: asNumber(query.premiumQuota, fixedOptions.premiumQuota),
           premiumModelPattern:
             typeof query.premiumModelPattern === "string" && query.premiumModelPattern
               ? query.premiumModelPattern
@@ -192,6 +211,52 @@ async function main() {
       return;
     }
 
+    if (url.pathname === "/api/memory-file") {
+      try {
+        const query = readQuery(url);
+        const rawPath = typeof query.path === "string" ? query.path.trim() : "";
+        if (!rawPath) {
+          json(res, 400, { ok: false, error: "missing path query param" });
+          return;
+        }
+
+        const workspaceRoot = path.resolve(fixedOptions.workspaceDir);
+        const memoryRoot = path.resolve(workspaceRoot, "memory");
+        const target = path.resolve(workspaceRoot, rawPath.replace(/^[/\\]+/u, ""));
+        const memoryPrefix = `${memoryRoot}${path.sep}`;
+        if (target !== memoryRoot && !target.startsWith(memoryPrefix)) {
+          json(res, 400, { ok: false, error: "path must stay under workspace/memory" });
+          return;
+        }
+
+        const stat = await fsp.stat(target);
+        if (!stat.isFile()) {
+          json(res, 404, { ok: false, error: "memory file not found" });
+          return;
+        }
+
+        const content = await fsp.readFile(target, "utf8");
+        const maxChars = 200_000;
+        const trimmed = content.length > maxChars ? content.slice(0, maxChars) : content;
+        json(res, 200, {
+          ok: true,
+          file: {
+            relativePath: path.relative(workspaceRoot, target),
+            size: stat.size,
+            mtimeMs: stat.mtimeMs,
+            truncated: content.length > maxChars,
+            content: trimmed,
+          },
+        });
+      } catch (error) {
+        json(res, 500, {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return;
+    }
+
     if (url.pathname === "/command.txt") {
       try {
         const query = readQuery(url);
@@ -203,8 +268,6 @@ async function main() {
           sessionLimit: asNumber(query.sessionLimit, 250),
           memoryLimit: asNumber(query.memoryLimit, 100),
           timelineLimit: asNumber(query.timelineLimit, 240),
-          requestQuota: asNumber(query.requestQuota, fixedOptions.requestQuota),
-          premiumQuota: asNumber(query.premiumQuota, fixedOptions.premiumQuota),
           premiumModelPattern:
             typeof query.premiumModelPattern === "string" && query.premiumModelPattern
               ? query.premiumModelPattern
