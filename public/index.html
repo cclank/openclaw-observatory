@@ -10,6 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Noto+Sans+SC:wght@400;500;700&display=swap"
       rel="stylesheet"
     />
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
@@ -54,33 +55,19 @@
               <option value="zh">中文</option>
             </select>
           </label>
-          <label>
-            <span data-i18n="label.requestQuota">Request Quota</span>
-            <input
-              id="requestQuotaInput"
-              type="number"
-              min="1"
-              step="1"
-              placeholder="Unlimited"
-              data-i18n-placeholder="placeholder.unlimited"
-            />
-          </label>
-          <label>
-            <span data-i18n="label.premiumQuota">Premium Quota</span>
-            <input
-              id="premiumQuotaInput"
-              type="number"
-              min="1"
-              step="1"
-              placeholder="Unlimited"
-              data-i18n-placeholder="placeholder.unlimited"
-            />
-          </label>
           <button id="refreshBtn" type="button" data-i18n="action.refresh">Refresh</button>
         </div>
       </header>
 
       <section class="cards" id="kpiCards"></section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2 data-i18n="story.title">Cross-Metric Storyline</h2>
+          <span id="storyMeta" class="meta"></span>
+        </div>
+        <div id="storyline" class="brief"></div>
+      </section>
 
       <section class="panel">
         <div class="panel-head">
@@ -127,18 +114,18 @@
       <section class="panel two-col">
         <article>
           <div class="panel-head">
-            <h2 data-i18n="chart.quota">Quota and Budget</h2>
-            <span id="quotaMeta" class="meta"></span>
-          </div>
-          <div id="quotaCards" class="memory-grid"></div>
-        </article>
-        <article>
-          <div class="panel-head">
             <h2 data-i18n="chart.qmd">QMD and Vector Retrieval</h2>
             <span id="vectorMeta" class="meta"></span>
           </div>
           <div id="vectorStats" class="memory-grid"></div>
           <div id="vectorCollections" class="chips"></div>
+        </article>
+        <article>
+          <div class="panel-head">
+            <h2 data-i18n="chart.costMethod">Cost Methodology</h2>
+            <span id="costMethodMeta" class="meta"></span>
+          </div>
+          <div id="costMethod" class="alerts"></div>
         </article>
       </section>
 
@@ -182,19 +169,14 @@
         </article>
       </section>
 
-      <section class="panel two-col">
+      <section class="panel">
         <article>
           <div class="panel-head">
             <h2 data-i18n="chart.keyFileTrend">Key File Daily Access</h2>
             <span id="keyFileMeta" class="meta"></span>
           </div>
           <div id="keyFileChart" class="chart"></div>
-        </article>
-        <article>
-          <div class="panel-head">
-            <h2 data-i18n="chart.keyFileRank">Key File Access Ranking</h2>
-          </div>
-          <div id="keyFileStats" class="bars"></div>
+          <div id="keyFileMethod" class="alerts"></div>
         </article>
       </section>
 
@@ -238,7 +220,6 @@
         </div>
         <div class="command-toolbar">
           <button class="cmd-btn" data-cmd="summary" type="button">summary</button>
-          <button class="cmd-btn" data-cmd="quota" type="button">quota</button>
           <button class="cmd-btn" data-cmd="qmd" type="button">qmd</button>
           <button class="cmd-btn" data-cmd="alerts" type="button">alerts</button>
           <button class="cmd-btn" data-cmd="daily" type="button">daily</button>
@@ -259,6 +240,10 @@
         <article>
           <div class="panel-head">
             <h2 data-i18n="memory.latestFiles">Latest Memory Files</h2>
+            <span id="memoryFilesCount" class="meta"></span>
+          </div>
+          <div class="memory-toolbar">
+            <input id="memorySearchInput" type="text" placeholder="Search file name/path/content" />
           </div>
           <div id="memoryFiles" class="memory-files"></div>
         </article>
@@ -286,7 +271,15 @@
           <h2 data-i18n="alert.title">Operational Alerts</h2>
           <span id="generatedAt" class="meta"></span>
         </div>
-        <div id="alerts" class="alerts"></div>
+        <div class="two-col">
+          <div id="alerts" class="alerts"></div>
+          <div>
+            <div class="panel-head">
+              <h2 data-i18n="alert.rules">Alert Rules</h2>
+            </div>
+            <div id="alertRules" class="alerts"></div>
+          </div>
+        </div>
       </section>
     </main>
 

@@ -14,12 +14,13 @@ OpenClaw Observatory 是一个面向 OpenClaw 的独立可观测性工具集。
 - 请求监控（类 Copilot 请求视角）
   - 总请求、可计费请求、高级请求
   - 成功/失败/超时/取消拆分
-  - 配额追踪与临界告警
   - `unknown` 来源细分（子代理、定时任务、直接 API/CLI、历史遗留、未分类）
 - Token、成本与延迟监控
   - 按日趋势
   - 尾延迟（p95）
   - 模型、Provider、工具分布
+  - 按模型差异化计费估算（元数据优先，定价映射回退）
+  - 成本来源可解释（元数据占比 vs 估算占比）
 - QMD/向量检索监控
   - `memory_search` 与向量检索调用量、错误率
   - QMD-backed 检索占比
@@ -31,8 +32,11 @@ OpenClaw Observatory 是一个面向 OpenClaw 的独立可观测性工具集。
   - 模型切换统计
 - 双语 Dashboard
   - 支持中英文切换（zh-CN / en）
+  - 首行筛选条冻结
+  - 图表可交互（tooltip、缩放、点击聚焦）
 - 关键文件访问监控
-  - `AGENT.md`、`TOOLS.md`、`SOUL.md`、`Memory` 的每日访问趋势与排行
+  - `AGENT.md`、`TOOLS.md`、`SOUL.md`、`Memory` 的每日访问趋势
+  - 统计方法与置信度说明
 - Telegram/Discord 命令摘要输出
   - `summary`、`quota`、`qmd`、`alerts`、`daily`、`weekly`
 
@@ -134,13 +138,12 @@ node bot-command.mjs --cmd summary --days 7
 ### 命令 API 示例
 
 ```text
-/api/command?cmd=summary&days=7&requestQuota=2000&premiumQuota=300
+/api/command?cmd=summary&days=7&lang=zh
 ```
 
 支持的 `cmd`：
 
 - `summary`
-- `quota`
 - `qmd`
 - `alerts`
 - `daily`
@@ -152,7 +155,6 @@ node bot-command.mjs --cmd summary --days 7
 推荐命令映射：
 
 - `/oc summary` -> `cmd=summary`
-- `/oc quota` -> `cmd=quota`
 - `/oc qmd` -> `cmd=qmd`
 - `/oc alerts` -> `cmd=alerts`
 - `/oc daily` -> `cmd=daily`
@@ -170,8 +172,6 @@ http://127.0.0.1:3188/command.txt?cmd=summary&days=7
 
 - `days`、`agent`、`channel`
 - `sessionLimit`、`memoryLimit`、`timelineLimit`
-- `requestQuota`、`premiumQuota`
-- `premiumModelPattern`
 - `lang`（`zh` 或 `en`，仅命令摘要输出）
 - `maxItems`（命令摘要最大条目数）
 
@@ -179,9 +179,7 @@ http://127.0.0.1:3188/command.txt?cmd=summary&days=7
 
 - `OPENCLAW_STATE_DIR`
 - `OPENCLAW_WORKSPACE_DIR`
-- `OPENCLAW_REQUEST_QUOTA`
-- `OPENCLAW_PREMIUM_REQUEST_QUOTA`
-- `OPENCLAW_PREMIUM_MODEL_PATTERN`
+- `OPENCLAW_MODEL_PRICING_JSON`（可选，用于覆盖模型定价映射）
 
 ## 验证
 
@@ -199,7 +197,8 @@ MIT，见 [LICENSE](LICENSE)。
 ## 已知限制
 
 - 会话解析为 best-effort，损坏行会被跳过
-- 成本统计依赖上游 transcript 元数据完整度
+- 成本统计优先使用 transcript 元数据；缺失时回退到模型定价估算
 - QMD/向量识别采用工具级启发式规则
 - `unknown` 来源细分采用启发式规则，依赖会话元数据完整度
+- 关键文件访问次数按路径访问事件统计，依赖工具调用中可见 path 字段
 - 异常检测用于运维信号，不等价于严格 SLO 判定

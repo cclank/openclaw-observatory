@@ -14,11 +14,12 @@ It provides dashboard analytics and bot-friendly command summaries for request u
 - Request analytics (Copilot-style usage perspective)
   - total, billable, premium requests
   - success/failure/timeout/cancelled breakdown
-  - quota tracking and near-limit alerts
   - `unknown` source breakdown (sub-agent, scheduled task, direct API/CLI, legacy, uncategorized)
 - Token, cost, and latency observability
   - daily trends and tail latency (p95)
   - model/provider and tool distributions
+  - model-aware cost estimation (metadata-first, pricing fallback)
+  - cost source explainability (metadata vs estimated share)
 - QMD/vector retrieval observability
   - `memory_search` and vector call volume/error rate
   - QMD-backed retrieval ratio
@@ -29,8 +30,11 @@ It provides dashboard analytics and bot-friendly command summaries for request u
   - timeline events and model switching details
 - Bilingual dashboard UI
   - zh-CN / en language toggle
+  - sticky top filter bar
+  - interactive charts (tooltip, zoom, click-to-focus storyline)
 - Key-file access analytics
   - daily access counts for `AGENT.md`, `TOOLS.md`, `SOUL.md`, and `Memory`
+  - method and confidence explanation panel
 - Chat-command output for Telegram/Discord
   - `summary`, `quota`, `qmd`, `alerts`, `daily`, `weekly`
 
@@ -132,13 +136,12 @@ node bot-command.mjs --cmd summary --days 7
 ### Command API Example
 
 ```text
-/api/command?cmd=summary&days=7&requestQuota=2000&premiumQuota=300
+/api/command?cmd=summary&days=7&lang=zh
 ```
 
 Supported `cmd` values:
 
 - `summary`
-- `quota`
 - `qmd`
 - `alerts`
 - `daily`
@@ -150,7 +153,6 @@ Supported `cmd` values:
 Recommended mapping:
 
 - `/oc summary` -> `cmd=summary`
-- `/oc quota` -> `cmd=quota`
 - `/oc qmd` -> `cmd=qmd`
 - `/oc alerts` -> `cmd=alerts`
 - `/oc daily` -> `cmd=daily`
@@ -168,8 +170,6 @@ Common options (`collector.mjs`, `bot-command.mjs`, and API query):
 
 - `days`, `agent`, `channel`
 - `sessionLimit`, `memoryLimit`, `timelineLimit`
-- `requestQuota`, `premiumQuota`
-- `premiumModelPattern`
 - `lang` (`zh` or `en`, command output only)
 - `maxItems` (command output)
 
@@ -177,9 +177,7 @@ Common options (`collector.mjs`, `bot-command.mjs`, and API query):
 
 - `OPENCLAW_STATE_DIR`
 - `OPENCLAW_WORKSPACE_DIR`
-- `OPENCLAW_REQUEST_QUOTA`
-- `OPENCLAW_PREMIUM_REQUEST_QUOTA`
-- `OPENCLAW_PREMIUM_MODEL_PATTERN`
+- `OPENCLAW_MODEL_PRICING_JSON` (optional JSON override for model pricing map)
 
 ## Validation
 
@@ -197,7 +195,8 @@ MIT. See [LICENSE](LICENSE).
 ## Limitations
 
 - Transcript parsing is best-effort; malformed lines are skipped
-- Cost quality depends on transcript metadata completeness
+- Cost quality depends on transcript metadata completeness; missing entries use model-pricing fallback
 - QMD/vector detection uses tool-level heuristics across generic ecosystems
 - `unknown` source breakdown is heuristic and depends on session metadata completeness
+- Key-file access counts are path-event based and depend on available tool path fields
 - Anomaly rules are operational signals, not strict SLO guarantees

@@ -91,6 +91,10 @@ body {
   align-items: flex-end;
   justify-content: space-between;
   gap: 16px;
+  position: sticky;
+  top: 10px;
+  z-index: 20;
+  box-shadow: 0 16px 36px rgba(92, 79, 65, 0.14);
 }
 
 .eyebrow {
@@ -197,7 +201,7 @@ input::placeholder {
 }
 
 .panel {
-  padding: 14px;
+  padding: 16px;
 }
 
 .two-col {
@@ -225,10 +229,11 @@ h2 {
 }
 
 .chart {
-  min-height: 200px;
-  border: 1px dashed rgba(148, 136, 121, 0.28);
+  min-height: 260px;
+  border: 1px solid rgba(148, 136, 121, 0.22);
   border-radius: 12px;
-  padding: 8px;
+  padding: 6px;
+  background: rgba(248, 243, 236, 0.64);
 }
 
 .chart svg {
@@ -270,6 +275,7 @@ h2 {
   overflow: auto;
   border-radius: 12px;
   border: 1px solid rgba(151, 140, 126, 0.32);
+  max-height: 460px;
 }
 
 th,
@@ -284,6 +290,14 @@ td {
 table {
   width: 100%;
   border-collapse: collapse;
+}
+
+thead th {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: rgba(243, 236, 227, 0.95);
+  backdrop-filter: blur(2px);
 }
 
 tbody tr {
@@ -453,8 +467,16 @@ tbody tr:hover {
 .memory-files {
   display: grid;
   gap: 8px;
-  max-height: 360px;
+  max-height: 520px;
   overflow: auto;
+}
+
+.memory-toolbar {
+  margin-bottom: 8px;
+}
+
+.memory-toolbar input {
+  width: 100%;
 }
 
 .memory-file {
@@ -518,6 +540,11 @@ tbody tr:hover {
   padding: 10px;
   border: 1px solid transparent;
   font-size: 13px;
+}
+
+.alert.rule {
+  background: rgba(245, 239, 230, 0.9);
+  border-color: rgba(153, 142, 126, 0.3);
 }
 
 .alert.info {

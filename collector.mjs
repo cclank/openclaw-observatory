@@ -44,9 +44,93 @@ const PREMIUM_MODEL_HINTS = [
   "70b",
   "405b",
 ];
-const TOOL_CALL_TYPES = new Set(["tool_use", "toolcall", "tool_call"]);
-const TOOL_RESULT_TYPES = new Set(["tool_result", "tool_result_error"]);
+const TOOL_CALL_TYPES = new Set([
+  "tool_use",
+  "toolcall",
+  "tool_call",
+  "tooluse",
+  "tool-use",
+  "function_call",
+  "functioncall",
+  "function-call",
+]);
+const TOOL_RESULT_TYPES = new Set([
+  "tool_result",
+  "tool_result_error",
+  "toolresult",
+  "tool-result",
+  "function_result",
+  "functionresult",
+  "function-result",
+]);
 const VECTOR_TOOL_HINTS = ["memory_search", "qmd", "vector", "semantic", "embedding"];
+const MODEL_PRICING_VERSION = "v1-default-estimate";
+const DEFAULT_MODEL_PRICING = [
+  {
+    id: "openai-gpt5",
+    patterns: [/gpt-5/i],
+    inputPerMillion: 1.25,
+    outputPerMillion: 10,
+    cacheReadPerMillion: 0.125,
+    cacheWritePerMillion: 1.25,
+  },
+  {
+    id: "openai-gpt41",
+    patterns: [/gpt-4\.1/i],
+    inputPerMillion: 2,
+    outputPerMillion: 8,
+    cacheReadPerMillion: 0.2,
+    cacheWritePerMillion: 2,
+  },
+  {
+    id: "openai-reasoning",
+    patterns: [/\bo1\b/i, /\bo3\b/i],
+    inputPerMillion: 15,
+    outputPerMillion: 60,
+    cacheReadPerMillion: 1.5,
+    cacheWritePerMillion: 15,
+  },
+  {
+    id: "anthropic-sonnet",
+    patterns: [/claude[-_.\s]?sonnet|sonnet[-_.\s]?4/i],
+    inputPerMillion: 3,
+    outputPerMillion: 15,
+    cacheReadPerMillion: 0.3,
+    cacheWritePerMillion: 3,
+  },
+  {
+    id: "anthropic-opus",
+    patterns: [/claude[-_.\s]?opus|opus[-_.\s]?4/i],
+    inputPerMillion: 15,
+    outputPerMillion: 75,
+    cacheReadPerMillion: 1.5,
+    cacheWritePerMillion: 15,
+  },
+  {
+    id: "google-gemini",
+    patterns: [/gemini[-_.\s]?2\.5|gemini[-_.\s]?pro/i],
+    inputPerMillion: 3.5,
+    outputPerMillion: 10.5,
+    cacheReadPerMillion: 0.35,
+    cacheWritePerMillion: 3.5,
+  },
+  {
+    id: "deepseek-r1",
+    patterns: [/deepseek[-_.\s]?r1/i],
+    inputPerMillion: 0.55,
+    outputPerMillion: 2.19,
+    cacheReadPerMillion: 0.055,
+    cacheWritePerMillion: 0.55,
+  },
+  {
+    id: "qwen-max",
+    patterns: [/qwen[-_.\s]?max/i],
+    inputPerMillion: 1.6,
+    outputPerMillion: 6.4,
+    cacheReadPerMillion: 0.16,
+    cacheWritePerMillion: 1.6,
+  },
+];
 const KEY_FILE_DEFINITIONS = [
   {
     key: "agentMd",
@@ -126,6 +210,99 @@ function parseArgs(argv) {
     i += 1;
   }
   return out;
+}
+
+function toPerMillionPrice(value, fallback = 0) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) {
+    return fallback;
+  }
+  return n;
+}
+
+function parsePricingOverrideEntry(entryRaw) {
+  const entry = asRecord(entryRaw);
+  if (!entry) {
+    return null;
+  }
+  const patterns = [];
+  if (typeof entry.pattern === "string" && entry.pattern.trim()) {
+    patterns.push(new RegExp(entry.pattern, "i"));
+  }
+  if (Array.isArray(entry.patterns)) {
+    for (const patternValue of entry.patterns) {
+      if (typeof patternValue === "string" && patternValue.trim()) {
+        patterns.push(new RegExp(patternValue, "i"));
+      }
+    }
+  }
+  if (!patterns.length) {
+    return null;
+  }
+  return {
+    id: typeof entry.id === "string" && entry.id.trim() ? entry.id.trim() : "custom",
+    patterns,
+    inputPerMillion: toPerMillionPrice(entry.inputPerMillion, 0),
+    outputPerMillion: toPerMillionPrice(entry.outputPerMillion, 0),
+    cacheReadPerMillion: toPerMillionPrice(entry.cacheReadPerMillion, 0),
+    cacheWritePerMillion: toPerMillionPrice(entry.cacheWritePerMillion, 0),
+  };
+}
+
+function loadPricingCatalog() {
+  const raw = process.env.OPENCLAW_MODEL_PRICING_JSON;
+  if (!raw || typeof raw !== "string" || !raw.trim()) {
+    return DEFAULT_MODEL_PRICING;
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return DEFAULT_MODEL_PRICING;
+    }
+    const overrides = parsed.map(parsePricingOverrideEntry).filter(Boolean);
+    return overrides.length ? overrides : DEFAULT_MODEL_PRICING;
+  } catch {
+    return DEFAULT_MODEL_PRICING;
+  }
+}
+
+const MODEL_PRICING_CATALOG = loadPricingCatalog();
+
+function resolveModelPricing(provider, model) {
+  const key = `${provider ?? ""} ${model ?? ""}`.toLowerCase().trim();
+  if (!key) {
+    return null;
+  }
+  for (const profile of MODEL_PRICING_CATALOG) {
+    if (profile.patterns.some((pattern) => pattern.test(key))) {
+      return profile;
+    }
+  }
+  return null;
+}
+
+function estimateCostFromUsage({ usage, provider, model }) {
+  const pricing = resolveModelPricing(provider, model);
+  if (!usage || !pricing) {
+    return null;
+  }
+  const input = ((usage.input ?? 0) / 1_000_000) * pricing.inputPerMillion;
+  const output = ((usage.output ?? 0) / 1_000_000) * pricing.outputPerMillion;
+  const cacheRead = ((usage.cacheRead ?? 0) / 1_000_000) * pricing.cacheReadPerMillion;
+  const cacheWrite = ((usage.cacheWrite ?? 0) / 1_000_000) * pricing.cacheWritePerMillion;
+  const total = input + output + cacheRead + cacheWrite;
+  if (!Number.isFinite(total) || total < 0) {
+    return null;
+  }
+  return {
+    source: "estimated",
+    pricingId: pricing.id,
+    total,
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+  };
 }
 
 function normalizeText(value) {
@@ -342,7 +519,33 @@ function extractCostBreakdown(usageRaw) {
   };
 }
 
-function extractToolDetails(message) {
+function extractToolNameFromRecord(value) {
+  const row = asRecord(value);
+  if (!row) {
+    return "";
+  }
+  return (
+    (typeof row.name === "string" && row.name.trim()) ||
+    (typeof row.toolName === "string" && row.toolName.trim()) ||
+    (typeof row.function === "string" && row.function.trim()) ||
+    (typeof row.tool === "string" && row.tool.trim()) ||
+    ""
+  );
+}
+
+function collectToolNamesFromList(list, names) {
+  if (!Array.isArray(list)) {
+    return;
+  }
+  for (const value of list) {
+    const name = extractToolNameFromRecord(value);
+    if (name) {
+      names.push(name);
+    }
+  }
+}
+
+function extractToolDetails(message, record) {
   const names = [];
   let results = 0;
   let errors = 0;
@@ -354,13 +557,14 @@ function extractToolDetails(message) {
       if (!block) {
         continue;
       }
-      if (block.type === "tool_use") {
+      const type = normalizeType(block.type);
+      if (TOOL_CALL_TYPES.has(type)) {
         const name = typeof block.name === "string" ? block.name.trim() : "";
         if (name) {
           names.push(name);
         }
       }
-      if (block.type === "tool_result") {
+      if (TOOL_RESULT_TYPES.has(type)) {
         results += 1;
         if (block.is_error === true) {
           errors += 1;
@@ -368,6 +572,11 @@ function extractToolDetails(message) {
       }
     }
   }
+
+  collectToolNamesFromList(message?.toolCalls, names);
+  collectToolNamesFromList(message?.tools, names);
+  collectToolNamesFromList(record?.toolCalls, names);
+  collectToolNamesFromList(record?.tools, names);
 
   if (message?.role === "tool") {
     const name =
@@ -386,7 +595,9 @@ function extractToolDetails(message) {
 }
 
 function normalizeType(value) {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
+  return typeof value === "string"
+    ? value.trim().toLowerCase().replaceAll("-", "_").replaceAll(" ", "_")
+    : "";
 }
 
 function normalizeToolName(value) {
@@ -437,13 +648,10 @@ function extractResultBlockText(value) {
   return chunks.join("\n").trim();
 }
 
-function extractToolBlocks(message) {
+function extractToolBlocks(message, record) {
   const uses = [];
   const results = [];
-  const content = message?.content;
-  if (!Array.isArray(content)) {
-    return { uses, results };
-  }
+  const content = Array.isArray(message?.content) ? message.content : [];
 
   for (const part of content) {
     const block = asRecord(part);
@@ -476,6 +684,30 @@ function extractToolBlocks(message) {
         text: extractResultBlockText(block.content),
       });
     }
+  }
+
+  const inlineToolCalls = [
+    ...(Array.isArray(message?.toolCalls) ? message.toolCalls : []),
+    ...(Array.isArray(message?.tools) ? message.tools : []),
+    ...(Array.isArray(record?.toolCalls) ? record.toolCalls : []),
+    ...(Array.isArray(record?.tools) ? record.tools : []),
+  ];
+  for (const row of inlineToolCalls) {
+    const name = extractToolNameFromRecord(row);
+    if (!name) {
+      continue;
+    }
+    const parsed = asRecord(row);
+    uses.push({
+      id:
+        typeof parsed?.id === "string" && parsed.id.trim()
+          ? parsed.id
+          : typeof parsed?.tool_use_id === "string" && parsed.tool_use_id.trim()
+            ? parsed.tool_use_id
+            : null,
+      name,
+      input: asRecord(parsed?.input) ?? null,
+    });
   }
 
   return { uses, results };
@@ -549,19 +781,20 @@ function extractText(content) {
     if (!block) {
       continue;
     }
-    if (block.type === "text" && typeof block.text === "string") {
+    const type = normalizeType(block.type);
+    if (type === "text" && typeof block.text === "string") {
       const text = block.text.trim();
       if (text) {
         chunks.push(text);
       }
       continue;
     }
-    if (block.type === "tool_use") {
+    if (TOOL_CALL_TYPES.has(type)) {
       const name = typeof block.name === "string" ? block.name : "tool";
       chunks.push(`[tool:${name}]`);
       continue;
     }
-    if (block.type === "tool_result") {
+    if (TOOL_RESULT_TYPES.has(type)) {
       chunks.push("[tool_result]");
     }
   }
@@ -590,6 +823,10 @@ function createTotals() {
     outputCost: 0,
     cacheReadCost: 0,
     cacheWriteCost: 0,
+    metadataCostEntries: 0,
+    estimatedCostEntries: 0,
+    metadataCostTotal: 0,
+    estimatedCostTotal: 0,
     missingCostEntries: 0,
   };
 }
@@ -749,6 +986,10 @@ function mergeTotals(target, source) {
   target.outputCost += source.outputCost;
   target.cacheReadCost += source.cacheReadCost;
   target.cacheWriteCost += source.cacheWriteCost;
+  target.metadataCostEntries += source.metadataCostEntries;
+  target.estimatedCostEntries += source.estimatedCostEntries;
+  target.metadataCostTotal += source.metadataCostTotal;
+  target.estimatedCostTotal += source.estimatedCostTotal;
   target.missingCostEntries += source.missingCostEntries;
 }
 
@@ -762,6 +1003,8 @@ function applyUsageTotals(totals, usage) {
 
 function applyCostBreakdown(totals, breakdown) {
   totals.totalCost += breakdown.total;
+  totals.metadataCostEntries += 1;
+  totals.metadataCostTotal += breakdown.total;
   if (breakdown.input !== undefined) {
     totals.inputCost += breakdown.input;
   }
@@ -779,9 +1022,26 @@ function applyCostBreakdown(totals, breakdown) {
 function applyCostTotal(totals, total) {
   if (typeof total === "number" && Number.isFinite(total) && total >= 0) {
     totals.totalCost += total;
+    totals.metadataCostEntries += 1;
+    totals.metadataCostTotal += total;
     return;
   }
   totals.missingCostEntries += 1;
+}
+
+function applyEstimatedCost(totals, estimate) {
+  const total = typeof estimate?.total === "number" ? estimate.total : NaN;
+  if (!Number.isFinite(total) || total < 0) {
+    totals.missingCostEntries += 1;
+    return;
+  }
+  totals.totalCost += total;
+  totals.estimatedCostEntries += 1;
+  totals.estimatedCostTotal += total;
+  totals.inputCost += estimate.input ?? 0;
+  totals.outputCost += estimate.output ?? 0;
+  totals.cacheReadCost += estimate.cacheRead ?? 0;
+  totals.cacheWriteCost += estimate.cacheWrite ?? 0;
 }
 
 function computeLatencyStats(values) {
@@ -990,8 +1250,8 @@ async function parseSessionFile(params) {
       lastUserTs = timestampMs;
     }
 
-    const tools = extractToolDetails(message);
-    const toolBlocks = extractToolBlocks(message);
+    const tools = extractToolDetails(message, record);
+    const toolBlocks = extractToolBlocks(message, record);
     const explicitToolName =
       typeof message.toolName === "string"
         ? message.toolName
@@ -1109,6 +1369,8 @@ async function parseSessionFile(params) {
           : undefined;
     const assistantModelKey = `${provider ?? "unknown"}::${model ?? "unknown"}`;
     let entryCostTotal;
+    let entryCostSource = "missing";
+    let entryPricingProfile = null;
 
     if (usage) {
       applyUsageTotals(totals, usage);
@@ -1130,19 +1392,36 @@ async function parseSessionFile(params) {
           dayBucket.cost += breakdown.total;
         }
         entryCostTotal = breakdown.total;
+        entryCostSource = "metadata";
       } else {
         const rawCostTotal =
           toFinite(record.costTotal) ??
           toFinite(message.costTotal) ??
           toFinite(asRecord(record.cost)?.total) ??
           toFinite(asRecord(message.cost)?.total);
-        applyCostTotal(totals, rawCostTotal);
-        applyCostTotal(modelBucket.totals, rawCostTotal);
-        if (dayBucket && typeof rawCostTotal === "number") {
-          dayBucket.cost += rawCostTotal;
-        }
-        if (typeof rawCostTotal === "number") {
+        if (typeof rawCostTotal === "number" && Number.isFinite(rawCostTotal) && rawCostTotal >= 0) {
+          applyCostTotal(totals, rawCostTotal);
+          applyCostTotal(modelBucket.totals, rawCostTotal);
+          if (dayBucket) {
+            dayBucket.cost += rawCostTotal;
+          }
           entryCostTotal = rawCostTotal;
+          entryCostSource = "metadata";
+        } else {
+          const estimate = estimateCostFromUsage({ usage, provider, model });
+          if (estimate) {
+            applyEstimatedCost(totals, estimate);
+            applyEstimatedCost(modelBucket.totals, estimate);
+            if (dayBucket) {
+              dayBucket.cost += estimate.total;
+            }
+            entryCostTotal = estimate.total;
+            entryCostSource = "estimated";
+            entryPricingProfile = estimate.pricingId ?? null;
+          } else {
+            totals.missingCostEntries += 1;
+            modelBucket.totals.missingCostEntries += 1;
+          }
         }
       }
 
@@ -1410,6 +1689,8 @@ async function parseSessionFile(params) {
         inputTokens: usage?.input ?? 0,
         outputTokens: usage?.output ?? 0,
         cost: typeof entryCostTotal === "number" ? entryCostTotal : null,
+        costSource: entryCostSource,
+        pricingProfile: entryPricingProfile,
         durationMs: typeof durationMs === "number" ? durationMs : null,
         toolCalls: tools.names.length,
         toolResults: tools.results,
@@ -1428,6 +1709,7 @@ async function parseSessionFile(params) {
         model: model ?? null,
         tokens: usage?.total ?? 0,
         cost: typeof entryCostTotal === "number" ? entryCostTotal : null,
+        costSource: entryCostSource,
         error: entryIsError,
       });
     }
@@ -2736,6 +3018,17 @@ export async function collectOpenClawMetrics(options = {}) {
       sessionsInScope: aggregated.filtered.length,
       totalTokens: aggregated.totals.totalTokens,
       totalCost: aggregated.totals.totalCost,
+      metadataCost: aggregated.totals.metadataCostTotal,
+      estimatedCost: aggregated.totals.estimatedCostTotal,
+      metadataCostEntries: aggregated.totals.metadataCostEntries,
+      estimatedCostEntries: aggregated.totals.estimatedCostEntries,
+      missingCostEntries: aggregated.totals.missingCostEntries,
+      costCoveragePct:
+        aggregated.totals.metadataCostEntries + aggregated.totals.estimatedCostEntries > 0
+          ? (aggregated.totals.metadataCostEntries /
+              (aggregated.totals.metadataCostEntries + aggregated.totals.estimatedCostEntries)) *
+            100
+          : 0,
       totalRequests: aggregated.requests.total,
       billableRequests: aggregated.requests.billable,
       premiumRequests: aggregated.requests.premium,
@@ -2757,6 +3050,23 @@ export async function collectOpenClawMetrics(options = {}) {
       keyFileAccessHits: aggregated.keyFiles?.totalHits ?? 0,
     },
     totals: aggregated.totals,
+    cost: {
+      pricingVersion: MODEL_PRICING_VERSION,
+      metadataCostTotal: aggregated.totals.metadataCostTotal,
+      estimatedCostTotal: aggregated.totals.estimatedCostTotal,
+      metadataCostEntries: aggregated.totals.metadataCostEntries,
+      estimatedCostEntries: aggregated.totals.estimatedCostEntries,
+      missingCostEntries: aggregated.totals.missingCostEntries,
+      metadataSharePct:
+        aggregated.totals.totalCost > 0
+          ? (aggregated.totals.metadataCostTotal / aggregated.totals.totalCost) * 100
+          : 0,
+      estimatedSharePct:
+        aggregated.totals.totalCost > 0
+          ? (aggregated.totals.estimatedCostTotal / aggregated.totals.totalCost) * 100
+          : 0,
+      activePricingProfiles: MODEL_PRICING_CATALOG.map((item) => item.id),
+    },
     messages: aggregated.messages,
     requests: aggregated.requests,
     vector: aggregated.vector,
@@ -2831,6 +3141,7 @@ export function buildCommandText(payload, options = {}) {
   const requests = payload?.requests ?? {};
   const vector = payload?.vector ?? {};
   const quota = payload?.quota ?? {};
+  const cost = payload?.cost ?? {};
   const unknownBreakdown = Array.isArray(payload?.aggregates?.unknownChannelBreakdown)
     ? payload.aggregates.unknownChannelBreakdown
     : [];
@@ -2908,6 +3219,7 @@ export function buildCommandText(payload, options = {}) {
     const lines = [
       `${L("OpenClaw 智能周报", "OpenClaw Weekly Brief")} (${range}d)`,
       `${L("请求", "Requests")}: ${compactInt(weeklyRequests)} · ${L("Tokens", "Tokens")}: ${compactTokens(weeklyTokens)} · ${L("成本", "Cost")}: ${compactUsd(summary.totalCost)}`,
+      `${L("成本口径", "Cost basis")}: ${L("元数据", "metadata")} ${compactPct(cost.metadataSharePct ?? 0)} · ${L("估算", "estimated")} ${compactPct(cost.estimatedSharePct ?? 0)}`,
       `${L("延迟", "Latency")}: avg ${compactMs(summary.avgLatencyMs)} · p95 ${compactMs(summary.p95LatencyMs)} · ${L("失败率", "Request fail")} ${compactPct(summary.requestFailureRatePct)}`,
       `${L("QMD 覆盖率", "QMD coverage")}: ${compactPct(weeklyVector > 0 ? (weeklyQmdBacked / weeklyVector) * 100 : summary.qmdBackedRatePct)} (${compactInt(weeklyQmdBacked)}/${compactInt(weeklyVector)})`,
       `${L("关键文件访问", "Key files touched")}: ${compactInt(summary.keyFileAccessHits ?? 0)} (AGENT/TOOLS/SOUL/Memory)`,
@@ -2935,7 +3247,6 @@ export function buildCommandText(payload, options = {}) {
     return [
       L("OpenClaw 命令视图:", "OpenClaw command views:"),
       "- summary",
-      "- quota",
       "- qmd",
       "- alerts",
       "- daily",
@@ -2948,6 +3259,7 @@ export function buildCommandText(payload, options = {}) {
     `${L("OpenClaw 摘要", "OpenClaw Summary")} (${range}d)`,
     `${L("请求", "Requests")}: ${compactInt(summary.totalRequests)} (${L("计费", "billable")} ${compactInt(summary.billableRequests)} · ${L("高级", "premium")} ${compactInt(summary.premiumRequests)} · ${L("失败", "fail")} ${compactPct(summary.requestFailureRatePct)})`,
     `${L("Tokens", "Tokens")}: ${compactTokens(summary.totalTokens)} · ${L("成本", "Cost")} ${compactUsd(summary.totalCost)}`,
+    `${L("成本口径", "Cost basis")}: ${L("元数据", "metadata")} ${compactPct(cost.metadataSharePct ?? 0)} · ${L("估算", "estimated")} ${compactPct(cost.estimatedSharePct ?? 0)}`,
     `${L("延迟", "Latency")}: avg ${compactMs(summary.avgLatencyMs)} · p95 ${compactMs(summary.p95LatencyMs)}`,
     `Vector/QMD: ${compactInt(summary.vectorSearches)} searches · qmd ${compactPct(summary.qmdBackedRatePct)} · err ${compactPct(summary.vectorSearchErrorRatePct)}`,
     unknownBreakdown.length > 0
@@ -2957,7 +3269,6 @@ export function buildCommandText(payload, options = {}) {
           return `${L("Unknown 细分", "Unknown breakdown")}: ${label} ${compactInt(top.total ?? 0)} (${L("会话", "sessions")} ${compactInt(top.sessions ?? 0)})`;
         })()
       : `${L("Unknown 细分", "Unknown breakdown")}: ${L("无", "none")}`,
-    `${L("配额", "Quota")}: ${L("总量", "total")} ${quota.totalLimit ?? L("不限", "unlimited")} (${L("已用", "used")} ${compactInt(quota.totalUsed)}) · ${L("高级", "premium")} ${quota.premiumLimit ?? L("不限", "unlimited")} (${L("已用", "used")} ${compactInt(quota.premiumUsed)})`,
     `${L("生成时间", "Generated")}: ${generatedAt}`,
   ];
   return lines.join("\n");
@@ -2967,7 +3278,7 @@ async function runCli() {
   const args = parseArgs(process.argv.slice(2));
 
   if (args.help) {
-    console.log(`OpenClaw Observatory Collector\n\nUsage:\n  node collector.mjs [--state-dir <path>] [--workspace-dir <path>] [--days <n|all>] [--agent <id>] [--channel <name>] [--session-limit <n>] [--memory-limit <n>] [--timeline-limit <n>] [--request-quota <n>] [--premium-quota <n>] [--premium-model-pattern <regex>] [--command <summary|quota|qmd|alerts|daily|weekly|help>] [--lang <zh|en>] [--max-items <n>] [--out <file>] [--pretty]\n`);
+    console.log(`OpenClaw Observatory Collector\n\nUsage:\n  node collector.mjs [--state-dir <path>] [--workspace-dir <path>] [--days <n|all>] [--agent <id>] [--channel <name>] [--session-limit <n>] [--memory-limit <n>] [--timeline-limit <n>] [--command <summary|qmd|alerts|daily|weekly|help>] [--lang <zh|en>] [--max-items <n>] [--out <file>] [--pretty]\n`);
     process.exit(0);
   }
 
