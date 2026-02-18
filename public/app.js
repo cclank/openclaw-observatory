@@ -29,6 +29,8 @@ const els = {
   tools: document.getElementById("toolsList"),
   requestModels: document.getElementById("requestModelsList"),
   requestChannels: document.getElementById("requestChannelsList"),
+  unknownBreakdownMeta: document.getElementById("unknownBreakdownMeta"),
+  unknownBreakdown: document.getElementById("unknownBreakdownList"),
   sessionCount: document.getElementById("sessionCount"),
   sessionsBody: document.querySelector("#sessionsTable tbody"),
   inspector: document.getElementById("sessionInspector"),
@@ -78,6 +80,7 @@ const I18N = {
     "chart.topTools": "Top Tools",
     "chart.requestByModel": "Request by Model",
     "chart.requestByChannel": "Request by Channel",
+    "chart.unknownBreakdown": "Unknown Source Breakdown",
     "chart.keyFileTrend": "Key File Daily Access",
     "chart.keyFileRank": "Key File Access Ranking",
     "session.title": "Sessions",
@@ -125,6 +128,7 @@ const I18N = {
     "chart.topTools": "工具 Top 排行",
     "chart.requestByModel": "按模型请求分布",
     "chart.requestByChannel": "按渠道请求分布",
+    "chart.unknownBreakdown": "Unknown 来源细分",
     "chart.keyFileTrend": "关键文件每日访问",
     "chart.keyFileRank": "关键文件访问排行",
     "session.title": "会话列表",
@@ -679,6 +683,33 @@ function renderRequestBreakdowns(data) {
       `${fmtInt(value)} req · ${fmtPct(value > 0 ? (row.premium / value) * 100 : 0)} premium`,
     emptyText: "No request-channel data",
   });
+
+  const unknownRows = (data.aggregates.unknownChannelBreakdown || []).slice(0, 8);
+  const unknownReq = unknownRows.reduce((sum, row) => sum + (row.total ?? 0), 0);
+  if (els.unknownBreakdownMeta) {
+    els.unknownBreakdownMeta.textContent =
+      unknownRows.length > 0
+        ? state.lang === "zh"
+          ? `${fmtInt(unknownReq)} 次请求已细分`
+          : `${fmtInt(unknownReq)} requests classified`
+        : state.lang === "zh"
+          ? "当前无 unknown 请求"
+          : "No unknown requests";
+  }
+  if (els.unknownBreakdown) {
+    renderBars({
+      mount: els.unknownBreakdown,
+      rows: unknownRows,
+      valueGetter: (row) => row.total ?? 0,
+      labelGetter: (row) =>
+        state.lang === "zh" ? row.labelZh ?? row.label ?? row.type : row.label ?? row.type,
+      valueFormatter: (value, row) =>
+        state.lang === "zh"
+          ? `${fmtInt(value)} 请求 · ${fmtInt(row.sessions ?? 0)} 会话`
+          : `${fmtInt(value)} req · ${fmtInt(row.sessions ?? 0)} sessions`,
+      emptyText: state.lang === "zh" ? "暂无 unknown 细分数据" : "No unknown breakdown data",
+    });
+  }
 }
 
 function renderKeyFiles(data) {

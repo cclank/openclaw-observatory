@@ -15,6 +15,7 @@ It provides dashboard analytics and bot-friendly command summaries for request u
   - total, billable, premium requests
   - success/failure/timeout/cancelled breakdown
   - quota tracking and near-limit alerts
+  - `unknown` source breakdown (sub-agent, scheduled task, direct API/CLI, legacy, uncategorized)
 - Token, cost, and latency observability
   - daily trends and tail latency (p95)
   - model/provider and tool distributions
@@ -198,4 +199,5 @@ MIT. See [LICENSE](LICENSE).
 - Transcript parsing is best-effort; malformed lines are skipped
 - Cost quality depends on transcript metadata completeness
 - QMD/vector detection uses tool-level heuristics across generic ecosystems
+- `unknown` source breakdown is heuristic and depends on session metadata completeness
 - Anomaly rules are operational signals, not strict SLO guarantees

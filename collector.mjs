@@ -69,6 +69,45 @@ const KEY_FILE_DEFINITIONS = [
     patterns: [/(?:^|[\\/\s'"])memory[\\/][^\s'"]+/gi, /\bmemory\.(?:md|mdx|txt)\b/gi],
   },
 ];
+const UNKNOWN_SOURCE_LABELS = {
+  sub_agent: { en: "Sub-agent Chain", zh: "子代理链路" },
+  scheduled_task: { en: "Scheduled Task", zh: "定时任务" },
+  direct_api_cli: { en: "Direct API/CLI", zh: "直接 API/CLI 调用" },
+  legacy_or_migrated: { en: "Legacy/Migrated", zh: "历史遗留/迁移会话" },
+  uncategorized: { en: "Uncategorized", zh: "未分类" },
+};
+const SUB_AGENT_HINTS = [
+  "sessions_spawn",
+  "session_spawn",
+  "spawn_agent",
+  "subagent",
+  "sub-agent",
+  "child session",
+];
+const SCHEDULE_HINTS = [
+  "cron",
+  "scheduled",
+  "schedule",
+  "timer",
+  "periodic",
+  "daily report",
+  "weekly report",
+  "digest",
+  "auto run",
+  "automation",
+];
+const DIRECT_HINTS = [
+  "cli",
+  "terminal",
+  "shell",
+  "command line",
+  "api",
+  "webhook",
+  "http",
+  "rpc",
+  "sdk",
+];
+const LEGACY_DAYS_THRESHOLD = 90;
 
 function parseArgs(argv) {
   const out = {};
@@ -87,6 +126,73 @@ function parseArgs(argv) {
     i += 1;
   }
   return out;
+}
+
+function normalizeText(value) {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function includesAnyHint(text, hints) {
+  if (!text) {
+    return false;
+  }
+  return hints.some((hint) => text.includes(hint));
+}
+
+function hasSubAgentToolUsage(toolUsage) {
+  const tools = Array.isArray(toolUsage?.tools) ? toolUsage.tools : [];
+  for (const row of tools) {
+    const name = normalizeText(row?.name);
+    if (includesAnyHint(name, SUB_AGENT_HINTS)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function guessUnknownSourceType(session) {
+  const now = Date.now();
+  const updatedAt = typeof session?.updatedAt === "number" ? session.updatedAt : null;
+  const chatType = normalizeText(session?.chatType);
+  const trigger = normalizeText(session?.trigger);
+  const mode = normalizeText(session?.mode);
+  const originProvider = normalizeText(session?.origin?.provider);
+  const originSource = normalizeText(session?.origin?.source);
+  const originType = normalizeText(session?.origin?.type);
+  const text = [chatType, trigger, mode, originProvider, originSource, originType]
+    .filter(Boolean)
+    .join(" ");
+
+  const hasParent =
+    (typeof session?.parentSessionId === "string" && session.parentSessionId.trim()) ||
+    (typeof session?.origin?.parentSessionId === "string" && session.origin.parentSessionId.trim());
+  if (hasParent || includesAnyHint(text, SUB_AGENT_HINTS) || hasSubAgentToolUsage(session?.toolUsage)) {
+    return "sub_agent";
+  }
+  if (includesAnyHint(text, SCHEDULE_HINTS)) {
+    return "scheduled_task";
+  }
+  if (includesAnyHint(text, DIRECT_HINTS)) {
+    return "direct_api_cli";
+  }
+  if (updatedAt && now - updatedAt > LEGACY_DAYS_THRESHOLD * DAY_MS) {
+    return "legacy_or_migrated";
+  }
+  return "uncategorized";
+}
+
+function createUnknownBreakdownRow(type) {
+  const labels = UNKNOWN_SOURCE_LABELS[type] ?? UNKNOWN_SOURCE_LABELS.uncategorized;
+  return {
+    type,
+    label: labels.en,
+    labelZh: labels.zh,
+    sessions: 0,
+    total: 0,
+    billable: 0,
+    premium: 0,
+    failed: 0,
+  };
 }
 
 function toFinite(value) {
@@ -1482,6 +1588,26 @@ async function parseSessionFile(params) {
     systemPromptReport: entry?.systemPromptReport ?? null,
     memoryFlushAt: toFinite(entry?.memoryFlushAt),
     memoryFlushCompactionCount: toFinite(entry?.memoryFlushCompactionCount),
+    parentSessionId:
+      typeof entry?.parentSessionId === "string"
+        ? entry.parentSessionId
+        : typeof entry?.origin?.parentSessionId === "string"
+          ? entry.origin.parentSessionId
+          : undefined,
+    trigger: typeof entry?.trigger === "string" ? entry.trigger : undefined,
+    mode: typeof entry?.mode === "string" ? entry.mode : undefined,
+    origin: asRecord(entry?.origin)
+      ? {
+          provider:
+            typeof entry.origin.provider === "string" ? entry.origin.provider : undefined,
+          source: typeof entry.origin.source === "string" ? entry.origin.source : undefined,
+          type: typeof entry.origin.type === "string" ? entry.origin.type : undefined,
+          parentSessionId:
+            typeof entry.origin.parentSessionId === "string"
+              ? entry.origin.parentSessionId
+              : undefined,
+        }
+      : undefined,
     modelOverride: typeof entry?.modelOverride === "string" ? entry.modelOverride : undefined,
     providerOverride:
       typeof entry?.providerOverride === "string" ? entry.providerOverride : undefined,
@@ -1958,6 +2084,7 @@ function aggregateSessions({ sessions, filter }) {
   const byRequestProviderMap = new Map();
   const byRequestAgentMap = new Map();
   const byRequestChannelMap = new Map();
+  const unknownChannelBreakdownMap = new Map();
   const dailyMap = new Map();
   const keyFileDailyMap = new Map();
   const keyFileTotals = emptyKeyFileCounts();
@@ -2103,6 +2230,17 @@ function aggregateSessions({ sessions, filter }) {
       cost: session.totals.totalCost,
     });
     byRequestChannelMap.set(channelKey, requestChannelRow);
+    if (!session.channel) {
+      const type = guessUnknownSourceType(session);
+      const unknownRow =
+        unknownChannelBreakdownMap.get(type) ?? createUnknownBreakdownRow(type);
+      unknownRow.sessions += 1;
+      unknownRow.total += session.requestCounts?.total ?? 0;
+      unknownRow.billable += session.requestCounts?.billable ?? 0;
+      unknownRow.premium += session.requestCounts?.premium ?? 0;
+      unknownRow.failed += session.requestCounts?.failed ?? 0;
+      unknownChannelBreakdownMap.set(type, unknownRow);
+    }
 
     for (const requestRow of session.requestUsage ?? []) {
       const modelKey = makeRequestModelKey(requestRow.provider, requestRow.model);
@@ -2358,6 +2496,9 @@ function aggregateSessions({ sessions, filter }) {
       byRequestProvider: Array.from(byRequestProviderMap.values()).sort(sortRequestRows),
       byRequestAgent: Array.from(byRequestAgentMap.values()).sort(sortRequestRows),
       byRequestChannel: Array.from(byRequestChannelMap.values()).sort(sortRequestRows),
+      unknownChannelBreakdown: Array.from(unknownChannelBreakdownMap.values()).sort((a, b) =>
+        b.total - a.total || b.sessions - a.sessions,
+      ),
       context: contextRows.sort((a, b) => b.chars - a.chars),
     },
   };
@@ -2690,6 +2831,9 @@ export function buildCommandText(payload, options = {}) {
   const requests = payload?.requests ?? {};
   const vector = payload?.vector ?? {};
   const quota = payload?.quota ?? {};
+  const unknownBreakdown = Array.isArray(payload?.aggregates?.unknownChannelBreakdown)
+    ? payload.aggregates.unknownChannelBreakdown
+    : [];
   const generatedAt =
     typeof payload?.generatedAt === "number"
       ? new Date(payload.generatedAt).toLocaleString(locale)
@@ -2768,6 +2912,13 @@ export function buildCommandText(payload, options = {}) {
       `${L("QMD 覆盖率", "QMD coverage")}: ${compactPct(weeklyVector > 0 ? (weeklyQmdBacked / weeklyVector) * 100 : summary.qmdBackedRatePct)} (${compactInt(weeklyQmdBacked)}/${compactInt(weeklyVector)})`,
       `${L("关键文件访问", "Key files touched")}: ${compactInt(summary.keyFileAccessHits ?? 0)} (AGENT/TOOLS/SOUL/Memory)`,
     ];
+    if (unknownBreakdown.length > 0) {
+      const top = unknownBreakdown[0];
+      const label = isZh ? top.labelZh ?? top.label ?? top.type : top.label ?? top.type;
+      lines.push(
+        `${L("Unknown 细分", "Unknown breakdown")}: ${label} ${compactInt(top.total ?? 0)} (${L("会话", "sessions")} ${compactInt(top.sessions ?? 0)})`,
+      );
+    }
     if (topAlerts.length) {
       lines.push(L("重点关注:", "Focus:"));
       for (const alert of topAlerts) {
@@ -2799,6 +2950,13 @@ export function buildCommandText(payload, options = {}) {
     `${L("Tokens", "Tokens")}: ${compactTokens(summary.totalTokens)} · ${L("成本", "Cost")} ${compactUsd(summary.totalCost)}`,
     `${L("延迟", "Latency")}: avg ${compactMs(summary.avgLatencyMs)} · p95 ${compactMs(summary.p95LatencyMs)}`,
     `Vector/QMD: ${compactInt(summary.vectorSearches)} searches · qmd ${compactPct(summary.qmdBackedRatePct)} · err ${compactPct(summary.vectorSearchErrorRatePct)}`,
+    unknownBreakdown.length > 0
+      ? (() => {
+          const top = unknownBreakdown[0];
+          const label = isZh ? top.labelZh ?? top.label ?? top.type : top.label ?? top.type;
+          return `${L("Unknown 细分", "Unknown breakdown")}: ${label} ${compactInt(top.total ?? 0)} (${L("会话", "sessions")} ${compactInt(top.sessions ?? 0)})`;
+        })()
+      : `${L("Unknown 细分", "Unknown breakdown")}: ${L("无", "none")}`,
     `${L("配额", "Quota")}: ${L("总量", "total")} ${quota.totalLimit ?? L("不限", "unlimited")} (${L("已用", "used")} ${compactInt(quota.totalUsed)}) · ${L("高级", "premium")} ${quota.premiumLimit ?? L("不限", "unlimited")} (${L("已用", "used")} ${compactInt(quota.premiumUsed)})`,
     `${L("生成时间", "Generated")}: ${generatedAt}`,
   ];
