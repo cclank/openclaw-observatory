@@ -445,37 +445,53 @@ function renderInteractiveDualChart({
   }
   chart.setOption(
     {
-      animationDuration: 360,
+      animationDuration: 420,
       color: [colorA, colorB],
-      tooltip: { trigger: "axis" },
+      tooltip: {
+        trigger: "axis",
+        borderWidth: 1,
+        borderColor: "rgba(130,120,108,0.35)",
+        backgroundColor: "rgba(249,245,239,0.95)",
+        textStyle: { color: "#3d3832" },
+      },
       legend: {
         top: 0,
-        textStyle: { color: "#71685d", fontSize: 11 },
+        textStyle: { color: "#6a6157", fontSize: 11, fontWeight: 700 },
       },
-      grid: { left: 14, right: 14, top: 34, bottom: 44, containLabel: true },
+      grid: { left: 16, right: 16, top: 38, bottom: 46, containLabel: true },
       xAxis: {
         type: "category",
         data: labels,
-        axisLabel: { color: "#655d53", fontSize: 11, hideOverlap: false },
-        axisLine: { lineStyle: { color: "#b8ae9f" } },
+        axisLabel: { color: "#6a6157", fontSize: 11, hideOverlap: false },
+        axisLine: { lineStyle: { color: "rgba(132,122,110,0.45)" } },
       },
       yAxis: [
         {
           type: "value",
-          axisLabel: { color: "#655d53", fontSize: 11, formatter: axisAFormatter },
-          axisLine: { show: true, lineStyle: { color: "rgba(125,117,106,0.25)" } },
-          splitLine: { lineStyle: { color: "rgba(148,136,121,0.16)" } },
+          axisLabel: { color: "#6a6157", fontSize: 11, formatter: axisAFormatter },
+          axisLine: { show: true, lineStyle: { color: "rgba(125,117,106,0.2)" } },
+          splitLine: { lineStyle: { color: "rgba(132,122,110,0.14)" } },
         },
         {
           type: "value",
-          axisLabel: { color: "#655d53", fontSize: 11, formatter: axisBFormatter },
-          axisLine: { show: true, lineStyle: { color: "rgba(125,117,106,0.25)" } },
+          axisLabel: { color: "#6a6157", fontSize: 11, formatter: axisBFormatter },
+          axisLine: { show: true, lineStyle: { color: "rgba(125,117,106,0.2)" } },
           splitLine: { show: false },
         },
       ],
       dataZoom: [
         { type: "inside", xAxisIndex: 0, filterMode: "none" },
-        { type: "slider", xAxisIndex: 0, height: 14, bottom: 8, brushSelect: false },
+        {
+          type: "slider",
+          xAxisIndex: 0,
+          height: 14,
+          bottom: 8,
+          brushSelect: false,
+          borderColor: "rgba(132,122,110,0.2)",
+          backgroundColor: "rgba(238,230,220,0.85)",
+          fillerColor: "rgba(146,159,149,0.25)",
+          handleStyle: { color: "#8ea295", borderColor: "#819287" },
+        },
       ],
       series: [
         {
@@ -487,7 +503,7 @@ function renderInteractiveDualChart({
           data: seriesA,
           yAxisIndex: 0,
           lineStyle: { width: 2.2 },
-          areaStyle: { opacity: 0.08 },
+          areaStyle: { opacity: 0.12 },
           emphasis: { focus: "series" },
         },
         {
@@ -525,8 +541,8 @@ function renderTrend(data) {
     seriesB: daily.map((d) => d.cost),
     nameA: state.lang === "zh" ? "Tokens" : "Tokens",
     nameB: state.lang === "zh" ? "成本" : "Cost",
-    colorA: "#7f9688",
-    colorB: "#ba9a73",
+    colorA: "#7f9086",
+    colorB: "#a9957f",
     axisAFormatter: axisTokens,
     axisBFormatter: axisUsd,
   });
@@ -545,8 +561,8 @@ function renderLatency(data) {
     seriesB: daily.map((d) => d.latency?.p95Ms ?? 0),
     nameA: "Avg",
     nameB: "P95",
-    colorA: "#819786",
-    colorB: "#b78578",
+    colorA: "#7b8e84",
+    colorB: "#b18779",
     axisAFormatter: axisMs,
     axisBFormatter: axisMs,
   });
@@ -565,8 +581,8 @@ function renderRequestTrend(data) {
     seriesB: daily.map((d) => d.premiumRequests ?? 0),
     nameA: state.lang === "zh" ? "总请求" : "Total",
     nameB: state.lang === "zh" ? "高级" : "Premium",
-    colorA: "#7b9584",
-    colorB: "#c4a77f",
+    colorA: "#7b8f85",
+    colorB: "#b59c7a",
     axisAFormatter: compactAxisValue,
     axisBFormatter: compactAxisValue,
   });
@@ -583,8 +599,8 @@ function renderRequestHealth(data) {
     seriesB: daily.map((d) => d.requestTimeouts ?? 0),
     nameA: state.lang === "zh" ? "失败" : "Failures",
     nameB: state.lang === "zh" ? "超时" : "Timeouts",
-    colorA: "#af7f72",
-    colorB: "#c4a77f",
+    colorA: "#a57f73",
+    colorB: "#b59b79",
     axisAFormatter: compactAxisValue,
     axisBFormatter: compactAxisValue,
   });
@@ -875,8 +891,8 @@ function renderKeyFiles(data) {
     }),
     nameA: state.lang === "zh" ? "总访问" : "Total Access",
     nameB: state.lang === "zh" ? "规范文件" : "Doc Hits",
-    colorA: "#8b9f92",
-    colorB: "#b58f7f",
+    colorA: "#83978b",
+    colorB: "#ae8d7e",
     axisAFormatter: (value) => compactAxisValue(value),
     axisBFormatter: (value) => compactAxisValue(value),
   });
