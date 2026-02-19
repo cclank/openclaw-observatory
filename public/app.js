@@ -414,6 +414,19 @@ function axisMs(value) {
   return `${Math.round(value)}ms`;
 }
 
+function axisSeconds(value) {
+  if (!Number.isFinite(value)) {
+    return "-";
+  }
+  if (Math.abs(value) >= 100) {
+    return `${value.toFixed(0)}s`;
+  }
+  if (Math.abs(value) >= 10) {
+    return `${value.toFixed(1)}s`;
+  }
+  return `${value.toFixed(2)}s`;
+}
+
 function renderInteractiveDualChart({
   key,
   mount,
@@ -426,6 +439,9 @@ function renderInteractiveDualChart({
   colorB,
   axisAFormatter = (value) => compactAxisValue(value),
   axisBFormatter = (value) => compactAxisValue(value),
+  tooltipAFormatter = axisAFormatter,
+  tooltipBFormatter = axisBFormatter,
+  sharedAxis = false,
 }) {
   if (!mount) {
     return;
@@ -453,6 +469,20 @@ function renderInteractiveDualChart({
         borderColor: "rgba(130,120,108,0.35)",
         backgroundColor: "rgba(249,245,239,0.95)",
         textStyle: { color: "#3d3832" },
+        formatter: (rows) => {
+          const items = Array.isArray(rows) ? rows : [rows];
+          if (!items.length) {
+            return "";
+          }
+          const title = items[0].axisValueLabel ?? items[0].name ?? "";
+          const lines = [esc(title)];
+          for (const item of items) {
+            const value = Number.isFinite(item?.value) ? item.value : NaN;
+            const formatter = item.seriesIndex === 0 ? tooltipAFormatter : tooltipBFormatter;
+            lines.push(`${item.marker}${esc(item.seriesName)}: ${esc(formatter(value))}`);
+          }
+          return lines.join("<br/>");
+        },
       },
       legend: {
         top: 0,
@@ -465,20 +495,29 @@ function renderInteractiveDualChart({
         axisLabel: { color: "#6a6157", fontSize: 11, hideOverlap: false },
         axisLine: { lineStyle: { color: "rgba(132,122,110,0.45)" } },
       },
-      yAxis: [
-        {
-          type: "value",
-          axisLabel: { color: "#6a6157", fontSize: 11, formatter: axisAFormatter },
-          axisLine: { show: true, lineStyle: { color: "rgba(125,117,106,0.2)" } },
-          splitLine: { lineStyle: { color: "rgba(132,122,110,0.14)" } },
-        },
-        {
-          type: "value",
-          axisLabel: { color: "#6a6157", fontSize: 11, formatter: axisBFormatter },
-          axisLine: { show: true, lineStyle: { color: "rgba(125,117,106,0.2)" } },
-          splitLine: { show: false },
-        },
-      ],
+      yAxis: sharedAxis
+        ? [
+            {
+              type: "value",
+              axisLabel: { color: "#6a6157", fontSize: 11, formatter: axisAFormatter },
+              axisLine: { show: true, lineStyle: { color: "rgba(125,117,106,0.2)" } },
+              splitLine: { lineStyle: { color: "rgba(132,122,110,0.14)" } },
+            },
+          ]
+        : [
+            {
+              type: "value",
+              axisLabel: { color: "#6a6157", fontSize: 11, formatter: axisAFormatter },
+              axisLine: { show: true, lineStyle: { color: "rgba(125,117,106,0.2)" } },
+              splitLine: { lineStyle: { color: "rgba(132,122,110,0.14)" } },
+            },
+            {
+              type: "value",
+              axisLabel: { color: "#6a6157", fontSize: 11, formatter: axisBFormatter },
+              axisLine: { show: true, lineStyle: { color: "rgba(125,117,106,0.2)" } },
+              splitLine: { show: false },
+            },
+          ],
       dataZoom: [
         { type: "inside", xAxisIndex: 0, filterMode: "none" },
         {
@@ -513,7 +552,7 @@ function renderInteractiveDualChart({
           symbol: "diamond",
           symbolSize: 6,
           data: seriesB,
-          yAxisIndex: 1,
+          yAxisIndex: sharedAxis ? 0 : 1,
           lineStyle: { width: 2.2, type: "dashed" },
           emphasis: { focus: "series" },
         },
@@ -541,8 +580,8 @@ function renderTrend(data) {
     seriesB: daily.map((d) => d.cost),
     nameA: state.lang === "zh" ? "Tokens" : "Tokens",
     nameB: state.lang === "zh" ? "成本" : "Cost",
-    colorA: "#7f9086",
-    colorB: "#a9957f",
+    colorA: "#637972",
+    colorB: "#8e7b6d",
     axisAFormatter: axisTokens,
     axisBFormatter: axisUsd,
   });
@@ -552,19 +591,22 @@ function renderLatency(data) {
   const daily = data.aggregates.daily || [];
   const rows = daily.filter((d) => d.latency);
   els.latencyMeta.textContent =
-    state.lang === "zh" ? `${rows.length} 天有延迟样本` : `${rows.length} days with latency`;
+    state.lang === "zh" ? `${rows.length} 天有延迟样本 · 单位秒` : `${rows.length} days with latency · seconds`;
   renderInteractiveDualChart({
     key: "latency",
     mount: els.latency,
     labels: daily.map((d) => d.date),
-    seriesA: daily.map((d) => d.latency?.avgMs ?? 0),
-    seriesB: daily.map((d) => d.latency?.p95Ms ?? 0),
+    seriesA: daily.map((d) => (d.latency?.avgMs ?? 0) / 1000),
+    seriesB: daily.map((d) => (d.latency?.p95Ms ?? 0) / 1000),
     nameA: "Avg",
     nameB: "P95",
-    colorA: "#7b8e84",
-    colorB: "#b18779",
-    axisAFormatter: axisMs,
-    axisBFormatter: axisMs,
+    colorA: "#5f746f",
+    colorB: "#8f7469",
+    axisAFormatter: axisSeconds,
+    axisBFormatter: axisSeconds,
+    tooltipAFormatter: axisSeconds,
+    tooltipBFormatter: axisSeconds,
+    sharedAxis: true,
   });
 }
 
@@ -581,8 +623,8 @@ function renderRequestTrend(data) {
     seriesB: daily.map((d) => d.premiumRequests ?? 0),
     nameA: state.lang === "zh" ? "总请求" : "Total",
     nameB: state.lang === "zh" ? "高级" : "Premium",
-    colorA: "#7b8f85",
-    colorB: "#b59c7a",
+    colorA: "#647a72",
+    colorB: "#8e806d",
     axisAFormatter: compactAxisValue,
     axisBFormatter: compactAxisValue,
   });
@@ -599,8 +641,8 @@ function renderRequestHealth(data) {
     seriesB: daily.map((d) => d.requestTimeouts ?? 0),
     nameA: state.lang === "zh" ? "失败" : "Failures",
     nameB: state.lang === "zh" ? "超时" : "Timeouts",
-    colorA: "#a57f73",
-    colorB: "#b59b79",
+    colorA: "#8f6d62",
+    colorB: "#9a846a",
     axisAFormatter: compactAxisValue,
     axisBFormatter: compactAxisValue,
   });
@@ -665,20 +707,29 @@ function renderVector(data) {
   els.vectorCollections.innerHTML = (vector.topCollections || [])
     .slice(0, 12)
     .map((item) => `<span class="chip">${esc(item.collection)} · ${esc(item.count)}</span>`)
-    .join("") || `<span class="muted">${state.lang === "zh" ? "未观察到 QMD collection" : "No QMD collections observed."}</span>`;
+    .join("") ||
+    `<span class="muted">${
+      state.lang === "zh"
+        ? "当前时间窗口未检测到 QMD collection（这不是错误）"
+        : "No QMD collections detected in current window (not an error)."
+    }</span>`;
   const topErrors = Array.isArray(vector.topErrors) ? vector.topErrors : [];
   const samples = Array.isArray(vector.errorSamples) ? vector.errorSamples : [];
   if (els.vectorErrorsMeta) {
     els.vectorErrorsMeta.textContent =
       state.lang === "zh"
-        ? `${fmtInt(vector.searchErrors ?? 0)} errors · 点击标签查看`
-        : `${fmtInt(vector.searchErrors ?? 0)} errors · click tags to inspect`;
+        ? `${fmtInt(vector.searchErrors ?? 0)} 次错误（当前窗口）· 点击标签查看`
+        : `${fmtInt(vector.searchErrors ?? 0)} errors in current window · click tags to inspect`;
   }
   if (!els.vectorErrors) {
     return;
   }
   if (!topErrors.length) {
-    els.vectorErrors.innerHTML = `<div class="muted">${state.lang === "zh" ? "当前无向量检索错误。" : "No vector retrieval errors in range."}</div>`;
+    els.vectorErrors.innerHTML = `<div class="muted">${
+      state.lang === "zh"
+        ? "当前时间窗口没有向量检索错误。"
+        : "No vector retrieval errors in the current window."
+    }</div>`;
     return;
   }
   const selected = state.selectedVectorError || topErrors[0].error;
@@ -891,8 +942,8 @@ function renderKeyFiles(data) {
     }),
     nameA: state.lang === "zh" ? "总访问" : "Total Access",
     nameB: state.lang === "zh" ? "规范文件" : "Doc Hits",
-    colorA: "#83978b",
-    colorB: "#ae8d7e",
+    colorA: "#688076",
+    colorB: "#927567",
     axisAFormatter: (value) => compactAxisValue(value),
     axisBFormatter: (value) => compactAxisValue(value),
   });

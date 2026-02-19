@@ -181,6 +181,60 @@ http://127.0.0.1:3188/command.txt?cmd=summary&days=7
 - `OPENCLAW_WORKSPACE_DIR`
 - `OPENCLAW_MODEL_PRICING_JSON`（可选，用于覆盖模型定价映射）
 
+## 成本核算与模型定价映射
+
+当前定价版本：
+
+- `v2-openrouter-snapshot-2026-02-19`
+
+定价来源：
+
+- 基于 `2026-02-19` 的 OpenRouter ` /api/v1/models ` 快照
+
+采集器核算优先级：
+
+1. 优先使用 transcript 元数据成本（`usage.cost.total`，若有则含 input/output/cache 拆分）。
+2. 其次使用原始总价字段（`costTotal` / `cost.total` 变体）。
+3. 仍缺失时，按模型定价档 + token 用量进行估算。
+4. 模型无法匹配时记入 `missingCostEntries`（不会强行猜价）。
+
+估算公式：
+
+- `estimated_total = input_tokens/1e6 * input_per_million + output_tokens/1e6 * output_per_million + cache_read_tokens/1e6 * cache_read_per_million + cache_write_tokens/1e6 * cache_write_per_million`
+
+默认定价档（USD / 百万 tokens）：
+
+- `anthropic-sonnet-4.5-4.6`：输入 `3`，输出 `15`，cache read `0.3`，cache write `3.75`
+- `anthropic-opus-4.5-4.6`：输入 `5`，输出 `25`，cache read `0.5`，cache write `6.25`
+- `openai-gpt-5.2-series`：输入 `1.75`，输出 `14`，cache read `0.175`
+- `openai-gpt-5.2-pro`：输入 `21`，输出 `168`
+- `openai-gpt-5.3-codex`：输入 `1.75`，输出 `14`，cache read `0.175`
+- `openai-gpt-5-default`：输入 `1.25`，输出 `10`，cache read `0.125`
+- `google-gemini-3-pro`：输入 `2`，输出 `12`，cache read `0.2`，cache write `0.375`
+- `google-gemini-3-flash`：输入 `0.5`，输出 `3`，cache read `0.05`，cache write `0.0833333333`
+- `zai-glm-5`：输入 `0.3`，输出 `2.55`
+- `moonshot-kimi-k2.5`：输入 `0.23`，输出 `3`
+- `minimax-m2.5`：输入 `0.3`，输出 `1.1`，cache read `0.15`
+- `minimax-m2.1`：输入 `0.27`，输出 `0.95`，cache read `0.03`
+- `qwen3-max`：输入 `1.2`，输出 `6`，cache read `0.24`
+- `qwen3.5-plus`：输入 `0.4`，输出 `2.4`
+- `qwen3.5-397b`：输入 `0.15`，输出 `1`，cache read `0.15`
+- `deepseek-chat`：输入 `0.32`，输出 `0.89`
+- `deepseek-reasoner`：输入 `0.7`，输出 `2.5`
+- `debug-local`：输入/输出/cache 均为 `0`
+
+Regex 别名映射覆盖：
+
+- `aigocode_*`、`anthropic/*`、`openrouter/anthropic/*`、`zenmux/anthropic/*`、`google-antigravity/claude-*`
+- `openai-codex/*`、`aigocode_openai/*`、`zenmux/openai/*`
+- `google/*`、`opencode/gemini-*`、`google-antigravity/gemini-*`、`openrouter/google/*`
+- `aliyun-bailian/*`、`streamlake/*`、`minimax-portal/*`、`openrouter/qwen/*`、`deepseek/*`
+
+特殊处理：
+
+- `openrouter/auto` 因为后端路由模型不确定，默认不做强制估算。
+- 可通过 `OPENCLAW_MODEL_PRICING_JSON` 完整覆盖默认定价映射。
+
 ## 验证
 
 ```bash

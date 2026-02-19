@@ -179,6 +179,60 @@ Common options (`collector.mjs`, `bot-command.mjs`, and API query):
 - `OPENCLAW_WORKSPACE_DIR`
 - `OPENCLAW_MODEL_PRICING_JSON` (optional JSON override for model pricing map)
 
+## Cost Accounting and Model Pricing Map
+
+Current pricing profile version:
+
+- `v2-openrouter-snapshot-2026-02-19`
+
+Pricing source:
+
+- OpenRouter model pricing snapshot from `2026-02-19` (`/api/v1/models`)
+
+Accounting priority (collector runtime):
+
+1. Use transcript metadata cost first (`usage.cost.total`, with input/output/cache breakdown if present).
+2. Fallback to raw total fields (`costTotal` / `cost.total` variants).
+3. If still missing, estimate by model profile and token usage.
+4. If model is not matchable, keep as `missingCostEntries` (no forced guess).
+
+Estimation formula:
+
+- `estimated_total = input_tokens/1e6 * input_per_million + output_tokens/1e6 * output_per_million + cache_read_tokens/1e6 * cache_read_per_million + cache_write_tokens/1e6 * cache_write_per_million`
+
+Default pricing profiles (USD per 1M tokens):
+
+- `anthropic-sonnet-4.5-4.6`: input `3`, output `15`, cache read `0.3`, cache write `3.75`
+- `anthropic-opus-4.5-4.6`: input `5`, output `25`, cache read `0.5`, cache write `6.25`
+- `openai-gpt-5.2-series`: input `1.75`, output `14`, cache read `0.175`
+- `openai-gpt-5.2-pro`: input `21`, output `168`
+- `openai-gpt-5.3-codex`: input `1.75`, output `14`, cache read `0.175`
+- `openai-gpt-5-default`: input `1.25`, output `10`, cache read `0.125`
+- `google-gemini-3-pro`: input `2`, output `12`, cache read `0.2`, cache write `0.375`
+- `google-gemini-3-flash`: input `0.5`, output `3`, cache read `0.05`, cache write `0.0833333333`
+- `zai-glm-5`: input `0.3`, output `2.55`
+- `moonshot-kimi-k2.5`: input `0.23`, output `3`
+- `minimax-m2.5`: input `0.3`, output `1.1`, cache read `0.15`
+- `minimax-m2.1`: input `0.27`, output `0.95`, cache read `0.03`
+- `qwen3-max`: input `1.2`, output `6`, cache read `0.24`
+- `qwen3.5-plus`: input `0.4`, output `2.4`
+- `qwen3.5-397b`: input `0.15`, output `1`, cache read `0.15`
+- `deepseek-chat`: input `0.32`, output `0.89`
+- `deepseek-reasoner`: input `0.7`, output `2.5`
+- `debug-local`: input/output/cache `0`
+
+Provider aliases covered by regex mapping:
+
+- `aigocode_*`, `anthropic/*`, `openrouter/anthropic/*`, `zenmux/anthropic/*`, `google-antigravity/claude-*`
+- `openai-codex/*`, `aigocode_openai/*`, `zenmux/openai/*`
+- `google/*`, `opencode/gemini-*`, `google-antigravity/gemini-*`, `openrouter/google/*`
+- `aliyun-bailian/*`, `streamlake/*`, `minimax-portal/*`, `openrouter/qwen/*`, `deepseek/*`
+
+Special handling:
+
+- `openrouter/auto` is intentionally not force-estimated because the routed backend model is unknown.
+- You can always override the entire catalog via `OPENCLAW_MODEL_PRICING_JSON`.
+
 ## Validation
 
 ```bash
